@@ -16,7 +16,7 @@ tools:
   - glob
   - grep
 model:
-  provider: deepseek
+  provider: huoshan-186
   model: deepseek-v4-pro
 memory_scope: private
 lifecycle: on-demand

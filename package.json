@@ -17,10 +17,7 @@
     }
   },
   "files": [
-    "lib/index.js",
-    "lib/index.d.ts",
-    "lib/client.js",
-    "lib/client/index.d.ts",
+    "lib",
     "cordis.patch.yml",
     "roles",
     "skills",

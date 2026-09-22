@@ -1,4 +1,5 @@
-import { isAbsolute, join, normalize } from 'node:path'
+import { dirname, isAbsolute, join, normalize, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import { compileRoleDirectory } from './l3-roles/role-loader.js'
 import { logger } from './shared/logger.js'
@@ -15,25 +16,26 @@ export const name = 'dsh-agent-weave'
 export const inject = ['subagents', 'skills']
 
 export interface Config {
-  /** 角色定义文件所在目录，默认 ./roles（相对插件包根） */
+  /** 角色定义文件所在目录（默认：插件包内 roles/，绝对路径优先） */
   rolesDir?: string
-  /** 技能文件所在目录，默认 ./skills（相对插件包根） */
+  /** 技能文件所在目录（默认：插件包内 skills/，绝对路径优先） */
   skillsDir?: string
   /** 底层传输 provider 名（默认 spawn，从 ctx.subagents 查找） */
   baseProvider?: string
 }
 
-/** 解析默认目录：相对插件包根解析，支持绝对路径。 */
-function resolveDir(configPath: string | undefined, fallback: string, cwd: string): string {
-  if (configPath !== undefined) return configPath
-  return normalize(isAbsolute(fallback) ? fallback : join(cwd, fallback))
+/** 插件包根目录（基于编译产物 lib/index.js 定位，避免依赖 process.cwd()）。 */
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
+/** 解析目录：绝对路径直接用；相对路径基于插件包根。 */
+function resolveDir(configPath: string | undefined, fallback: string): string {
+  if (configPath !== undefined) return normalize(isAbsolute(configPath) ? configPath : join(PACKAGE_ROOT, configPath))
+  return join(PACKAGE_ROOT, fallback)
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
-  // 解析配置
-  const cwd = process.cwd()
-  const rolesDir = resolveDir(config.rolesDir, 'roles', cwd)
-  const skillsDir = resolveDir(config.skillsDir, 'skills', cwd)
+  const rolesDir = resolveDir(config.rolesDir, 'roles')
+  const skillsDir = resolveDir(config.skillsDir, 'skills')
 
   // 查找底层 delegate provider（spawn）
   const delegate = ctx.subagents.getProvider(config.baseProvider ?? 'spawn')
@@ -59,5 +61,6 @@ export function apply(ctx: Context, config: Config = {}): void {
   logger.info('weave', '角色注册完成', {
     count: providers.length,
     roles: providers.map((p) => ({ role_id: p.name, inherits_parent_context: p.inheritsParentContext })),
+    roles_dir: rolesDir,
   })
 }
