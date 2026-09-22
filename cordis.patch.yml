@@ -1,0 +1,19 @@
+# dsh-agent-weave 插件挂载 patch（bundle 形态）
+#
+# 安装方式（隔离 profile，不污染主环境）：
+#   pnpm pack   # 或 npm pack
+#   dsh plugin --profile <weave-test> add ./dist/dsh-agent-weave-0.1.0.tgz
+#
+# 本 patch 是 dsh.bundle.patch 指向的加载清单：以 insert 条目把本插件的
+# Host 半端（src/index.ts → lib/index.js）挂入 profile 的插件树。
+# Client 半端（lib/client.js）经 package.json 的 dsh.client 声明由
+# dsh-client-modules 自动扫描，无需在此登记。
+#
+# 如需在 profile 层覆盖插件配置，追加 id 定向条目：
+# - id: dsh-agent-weave
+#   config:
+#     rolesDir: ./roles
+#     skillsDir: ./skills
+- insert:
+    - id: dsh-agent-weave
+      name: dsh-agent-weave

@@ -1,0 +1,170 @@
+/**
+ * 角色 Provider 编译器（MVP-1 P1.1.6）。
+ *
+ * 将角色 YAML 编译为 RoleProfile（D-001 决策）。
+ *
+ * 编译流水线（文档 §3.2）：
+ *   ① 解析 system_prompt_ref 路径（相对 skillsDir 或绝对路径）
+ *   ② 读取 skill 文件（不存在/读取失败抛 RoleLoadError）
+ *   ③ 映射字段：name ← id，persona ← skill 内容，toolFilter ← tools，
+ *      agentOptions ← { provider, model }（完整对象，🐛 #4311/#4313），
+ *      depthLimit ← max_concurrent_children，inheritsParentContext ← (memory_scope === 'shared')
+ *   ④ 返回 RoleProfile
+ *
+ * 关键约束：
+ * - 路径逃逸防护：解析后的路径必须位于 skillsDir 之内（编译期校验）
+ * - 不缓存 skill 内容：每次编译重新读取（热重载后不使用过期内容）
+ * - 同步函数：异步 IO 由调用方处理（Cordis apply 是同步的）
+ */
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
+import { RoleLoadError, type RoleDefinition, type RoleProfile } from '../shared/types.js'
+import { fingerprint } from '../shared/logger.js'
+import { parseRoleYaml } from './role-schema.js'
+
+/** 编译选项。 */
+export interface CompileOptions {
+  /** skill 文件所在目录（system_prompt_ref 相对路径的解析基准）。 */
+  skillsDir: string
+}
+
+/**
+ * 路径逃逸校验：解析后的绝对路径必须位于 skillsDir 内。
+ * @returns 规范化后的绝对路径（校验通过时）。
+ * @throws {RoleLoadError} 路径逃逸 skillsDir。
+ */
+export function assertInsideSkillsDir(skillsDir: string, target: string, roleId: string): string {
+  const resolvedSkillsDir = resolve(skillsDir)
+  const resolvedTarget = resolve(target)
+  const rel = relative(resolvedSkillsDir, resolvedTarget)
+  const isInside = rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  if (!isInside) {
+    throw new RoleLoadError(
+      `skill 路径不允许逃逸 skillsDir: ${target}（由 ${roleId}.system_prompt_ref 引用）`,
+    )
+  }
+  return resolvedTarget
+}
+
+/** 解析 system_prompt_ref 到绝对路径（相对路径基于 skillsDir，绝对路径直接使用）。 */
+export function resolveSystemPromptPath(skillsDir: string, ref: string): string {
+  if (isAbsolute(ref)) return normalize(ref)
+  return resolve(skillsDir, ref)
+}
+
+/**
+ * 将角色 YAML 编译为 RoleProfile。
+ *
+ * @param role - 通过 Zod Schema 校验的角色定义
+ * @param options - 编译选项（skillsDir 等）
+ * @returns 供 workflowEngine 组装 SubagentStartRequest 的角色画像
+ * @throws {RoleLoadError} skill 文件不存在、读取失败或路径逃逸
+ */
+export function compileRoleToProvider(role: RoleDefinition, options: CompileOptions): RoleProfile {
+  const target = resolveSystemPromptPath(options.skillsDir, role.system_prompt_ref)
+  const safeTarget = assertInsideSkillsDir(options.skillsDir, target, role.id)
+
+  if (!existsSync(safeTarget)) {
+    throw new RoleLoadError(`skill 文件不存在: ${safeTarget}（由 ${role.id}.system_prompt_ref 引用）`)
+  }
+
+  let persona: string
+  try {
+    persona = readFileSync(safeTarget, 'utf8')
+  } catch (error) {
+    const errno = error instanceof Error && 'code' in error ? String(error.code) : String(error)
+    throw new RoleLoadError(`skill 文件读取失败: ${safeTarget}: ${errno}`, { cause: error })
+  }
+
+  return {
+    name: role.id,
+    persona,
+    toolFilter: [...role.tools],
+    agentOptions: {
+      provider: role.model.provider,
+      model: role.model.model,
+    },
+    ...(role.max_concurrent_children > 0 ? { depthLimit: role.max_concurrent_children } : {}),
+    inheritsParentContext: role.memory_scope === 'shared',
+    metadata: {
+      name: role.name,
+      traits: [...role.traits],
+      capabilities: [...role.capabilities],
+      quality_gate: [...role.quality_gate],
+      token_budget: role.token_budget,
+      lifecycle: role.lifecycle,
+      handoff: {
+        upstream: [...role.handoff.upstream],
+        downstream: [...role.handoff.downstream],
+        edge_type: role.handoff.edge_type,
+      },
+    },
+  }
+}
+
+/**
+ * 扫描 rolesDir 下的全部 YAML 文件。
+ * @param rolesDir - 角色定义目录
+ * @returns 排序后的 .yaml/.yml 文件绝对路径列表
+ * @throws {RoleLoadError} 角色目录不可读
+ */
+export function scanRoleFiles(rolesDir: string): string[] {
+  let entries: string[]
+  try {
+    entries = readdirSync(rolesDir)
+  } catch (error) {
+    throw new RoleLoadError(
+      `角色目录读取失败: ${rolesDir}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    )
+  }
+  return entries
+    .filter((name) => name.endsWith('.yaml') || name.endsWith('.yml'))
+    .sort()
+    .map((name) => join(rolesDir, name))
+}
+
+/**
+ * 加载角色目录中的全部角色定义。
+ * @param rolesDir - 角色定义目录
+ * @returns 角色定义列表（按文件名字母序）
+ */
+export function loadRoleDefinitions(rolesDir: string): RoleDefinition[] {
+  const files = scanRoleFiles(rolesDir)
+  const roles: RoleDefinition[] = []
+  for (const file of files) {
+    let raw: string
+    try {
+      raw = readFileSync(file, 'utf8')
+    } catch (error) {
+      throw new RoleLoadError(
+        `角色文件读取失败: ${file}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      )
+    }
+    const role = parseRoleYaml(raw, file)
+    roles.push(role)
+  }
+  return roles
+}
+
+/** 编译目录内全部角色为 RoleProfile（供插件 apply 批量注册使用）。 */
+export function compileRoleDirectory(rolesDir: string, options: CompileOptions): RoleProfile[] {
+  const roles = loadRoleDefinitions(rolesDir)
+  return roles.map((role) => compileRoleToProvider(role, options))
+}
+
+/**
+ * 角色加载成功日志数据（脱敏：不记录 persona 全文，只记录长度与指纹）。
+ */
+export function describeRoleProfile(profile: RoleProfile): Record<string, unknown> {
+  return {
+    role_id: profile.name,
+    persona_len: profile.persona.length,
+    persona_fp: fingerprint(profile.persona),
+    tool_count: profile.toolFilter.length,
+    provider: profile.agentOptions.provider,
+    model: profile.agentOptions.model,
+    memory_scope: profile.inheritsParentContext ? 'shared' : 'private',
+  }
+}

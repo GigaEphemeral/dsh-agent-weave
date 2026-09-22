@@ -1,1 +1,20 @@
+# 依赖与构建产物
+node_modules/
+lib/
+dist/
+*.tsbuildinfo
+
+# 测试隔离环境（含隔离 DSH_HOME，体积大且可重建）
+test-env/
+!test-env/README.md
+
+# 三方参考代码（用户手动下载，不提交）
 docs/MVP-1/reference-gitignore
+
+# 运行时交付物（每次运行重新生成；角色定义 roles/ 与技能 skills/ 是源码资产，保留提交）
+productions/*
+!productions/.gitkeep
+
+# 日志与临时文件
+*.log
+.ocr-reports/
