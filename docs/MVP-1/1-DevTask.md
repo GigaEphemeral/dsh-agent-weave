@@ -1,11 +1,11 @@
-# MVP-1 详细开发计划与任务清单（Windows + DSH 0.1.15-rc2）
+# MVP-1 详细开发计划与任务清单（Windows + DSH 0.1.5-rc2）
 
-> 版本：v1（2026-09-22）｜环境：**Windows 11 + DSH 0.1.15-rc2 + Node 24**
+> 版本：v1（2026-09-22）｜环境：**Windows 11 + DSH 0.1.5-rc2 + Node 24**
 > 依据：`00-开发计划.md` MVP-1 + `04-MVP与设计契约.md` + Windows 环境实测记录
 > 目标：**验证角色能否作为 SubagentProvider 被正确编译、注册、执行、隔离**
 
 
-## 一、环境适配说明（Windows + DSH 0.1.15-rc2）
+## 一、环境适配说明（Windows + DSH 0.1.5-rc2）
 
 ### 1.1 环境基线
 
@@ -14,7 +14,7 @@
 | OS | Windows 11 Pro | 本文档的 Windows 特例在此环境实测 |
 | Node | **v24.18.1** 或 `^22.19` | DSH 要求 `^22.19.0 || >=24.0.0` |
 | pnpm | **11.7.0** | 与 Node 版本必须匹配 |
-| DSH | **0.1.15-rc2** | npm 全局安装 |
+| DSH | **0.1.5-rc2** | npm 全局安装 |
 | Shell | PowerShell 5.1 / pwsh | Windows 上 DSH 使用 `pwsh` 工具而非 Bash |
 
 ### 1.2 Windows 特有限制
@@ -64,7 +64,7 @@ node -e "const {pathToFileURL}=require('node:url'); console.log(pathToFileURL('C
 
 | 项 | 内容 |
 |---|---|
-| **目标** | 确认 DSH 0.1.15-rc2 在 Windows 上可正常运行，所有依赖工具就绪 |
+| **目标** | 确认 DSH 0.1.5-rc2 在 Windows 上可正常运行，所有依赖工具就绪 |
 | **交付物** | 环境验证报告（`docs/env-verification.md`） |
 | **前置** | 无 |
 
@@ -73,7 +73,7 @@ node -e "const {pathToFileURL}=require('node:url'); console.log(pathToFileURL('C
 ```powershell
 # 1. 确认 DSH 版本
 dsh --version
-# 期望输出：0.1.15-rc2
+# 期望输出：0.1.5-rc2
 
 # 2. 确认 Node 版本
 node --version
@@ -92,7 +92,7 @@ dsh web --help
 ```
 
 **验收标准**：
-- [ ] `dsh --version` 输出 `0.1.15-rc2`
+- [ ] `dsh --version` 输出 `0.1.5-rc2`
 - [ ] `node --version` 满足 `^22.19.0 || >=24.0.0`
 - [ ] `pnpm --version` 输出 `11.7.0` 或兼容版本
 - [ ] `dsh web --help` 正常输出帮助信息
