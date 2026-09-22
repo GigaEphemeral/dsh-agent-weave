@@ -2,18 +2,19 @@ import { dirname, isAbsolute, join, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import { compileRoleDirectory } from './l3-roles/role-loader.js'
+import { registerChainTool } from './l2-engine/chain-tool.js'
 import { logger } from './shared/logger.js'
 
 /**
  * dsh-agent-weave 插件入口（Host 半端）。
  *
- * MVP-1：加载角色 YAML → 编译为 SubagentProvider → 注册到 ctx.subagents。
- * 每个角色包装 spawn provider，start() 注入 persona/toolFilter/agentOptions。
+ * MVP-1：加载角色 YAML → 编译为 SubagentProvider → 注册到 ctx.subagents；
+ * 注册 weave:run-chain 验证工具（执行 R1→R8 单链）。
  */
 export const name = 'dsh-agent-weave'
 
-/** 声明依赖的服务：subagents（子代理注册表）+ skills（技能服务，探测可选）。 */
-export const inject = ['subagents', 'skills']
+/** 声明依赖的服务：subagents（子代理注册表）+ tools（工具注册）+ skills（探测可选）。 */
+export const inject = ['subagents', 'tools', 'skills']
 
 export interface Config {
   /** 角色定义文件所在目录（默认：插件包内 roles/，绝对路径优先） */
@@ -56,6 +57,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       agent_route_defaults: provider.agentRouteDefaults,
     })
   }
+
+  // 注册单链验证工具（MVP-1 验证用；MVP-2 由 StateGraph 取代）
+  registerChainTool(ctx)
 
   // 记录编译摘要
   logger.info('weave', '角色注册完成', {

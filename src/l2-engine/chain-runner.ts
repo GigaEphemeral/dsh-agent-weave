@@ -86,10 +86,14 @@ export async function runChain(
     const artifactPath = join(stepDir, step.artifactName)
 
     const prompt = step.prompt({ userInput, upstream })
+    // 读取角色 provider 的 toolFilter（从注册表获取，验证最小权限声明）
+    const provider = ctx.subagents.getProvider(step.roleId)
     logger.info('chain', `执行阶段 ${step.phase}（${step.roleId}）`, {
       role_id: step.roleId,
       prompt_len: prompt.length,
       upstream_count: upstream.length,
+      tool_filter: provider?.capabilities.toolFilter === true ? 'capability-enabled' : 'n/a',
+      inherits_parent_context: provider?.inheritsParentContext,
     })
 
     // 启动角色子代理（角色 provider 会注入 persona/toolFilter/agentOptions）
