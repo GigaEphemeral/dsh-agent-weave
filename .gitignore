@@ -5,7 +5,7 @@ dist/
 *.tsbuildinfo
 
 # 测试隔离环境（含隔离 DSH_HOME，体积大且可重建）
-test-env/
+test-env/*
 !test-env/README.md
 
 # 三方参考代码（用户手动下载，不提交）
