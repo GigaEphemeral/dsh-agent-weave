@@ -1,5 +1,11 @@
 /**
- * weave:run-chain 测试工具（MVP-1 P1.2.4 触发入口）。
+ * weave_run_chain 测试工具（MVP-1 P1.2.4 触发入口）。
+ *
+ * ⚠️ 工具名必须符合 OpenAI 兼容端点的函数名规范 `^[a-zA-Z0-9_-]{1,128}$`。
+ *    🐛 实测：原名 `weave:run-chain` 含冒号，被火山引擎端点拒绝
+ *    （400 InvalidParameter: tools.N.function.name expected 1-128 ASCII
+ *    letters, digits, underscores or hyphens）。mock server 不校验函数名，
+ *    故仅真实 LLM 环境暴露此问题。
  *
  * headless/web 主 Agent 通过此工具执行 R1→R8 单链，验证：
  * - 多角色串行协作（Q4）
@@ -67,10 +73,10 @@ export async function executeChain(
   }
 }
 
-/** 注册 weave:run-chain 工具。 */
+/** 注册 weave_run_chain 工具。 */
 export function registerChainTool(ctx: Context): () => void {
   const tool = defineTool({
-    name: 'weave:run-chain',
+    name: 'weave_run_chain',
     description:
       '执行 MVP-1 单链：按 R1→R2→R4→R6→R7→R8 顺序调用六个角色子代理，每个角色独立 Session（记忆隔离），' +
       '产物落盘 productions/<角色ID>/。返回各角色产物摘要。用于验证角色协作闭环。',

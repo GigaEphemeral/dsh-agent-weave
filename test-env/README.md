@@ -30,7 +30,7 @@ $env:MOCK_LLM_API_KEY = 'mock-key'
 node "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js" --profile weave-test --no-open --port 0
 
 # headless 一次性任务（端到端单链）
-node "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js" --profile weave-headless "调用 weave:run-chain 工具，user_input 为 '...'"
+node "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js" --profile weave-headless "调用 weave_run_chain 工具，user_input 为 '...'"
 ```
 
 ## 当前状态（2026-09-22）

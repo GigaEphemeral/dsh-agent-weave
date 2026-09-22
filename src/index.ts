@@ -9,7 +9,7 @@ import { logger } from './shared/logger.js'
  * dsh-agent-weave 插件入口（Host 半端）。
  *
  * MVP-1：加载角色 YAML → 编译为 SubagentProvider → 注册到 ctx.subagents；
- * 注册 weave:run-chain 验证工具（执行 R1→R8 单链）。
+ * 注册 weave_run_chain 验证工具（执行 R1→R8 单链）。
  */
 export const name = 'dsh-agent-weave'
 
