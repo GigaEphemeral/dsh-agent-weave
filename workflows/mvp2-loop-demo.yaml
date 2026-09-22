@@ -1,0 +1,18 @@
+# MVP-2 循环演示工作流：develop → test → quality → (loop 回退 develop / cond 升级 approval)
+version: '1.0'
+graphVersion: '0.1.0'
+graphSchemaHash: 'demo'
+entryPoint: develop
+maxIterations: 25
+nodes:
+  - { id: develop, roleRef: R6-developer, nodeType: role }
+  - { id: test, roleRef: R7-tester, nodeType: role }
+  - { id: quality, roleRef: R8-quality, nodeType: role }
+  - { id: approval, nodeType: approval }
+edges:
+  - { from: develop, to: test, type: seq }
+  - { from: test, to: quality, type: seq }
+  - { from: quality, to: develop, type: loop, maxIter: 3 }
+  - { from: quality, to: approval, type: cond, when: 'state.retry_count >= 3' }
+checkpoint: { strategy: node-level, storage: fs }
+metadata: { source: yaml, createdAt: '2026-09-23T00:00:00Z', updatedAt: '2026-09-23T00:00:00Z' }

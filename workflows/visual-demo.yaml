@@ -1,0 +1,18 @@
+# MVP-2 可视化验收图（无角色依赖：condition + approval 节点，mock 执行零 LLM）
+version: '1.0'
+graphVersion: '0.1.0'
+graphSchemaHash: 'visual-demo'
+entryPoint: start
+maxIterations: 25
+nodes:
+  - { id: start, nodeType: condition }
+  - { id: build, nodeType: condition }
+  - { id: check, nodeType: condition }
+  - { id: done, nodeType: approval }
+edges:
+  - { from: start, to: build, type: seq }
+  - { from: build, to: check, type: seq }
+  - { from: check, to: build, type: loop, maxIter: 3 }
+  - { from: check, to: done, type: cond, when: 'state.retry_count >= 3' }
+checkpoint: { strategy: node-level, storage: fs }
+metadata: { source: yaml, createdAt: '2026-09-23T00:00:00Z', updatedAt: '2026-09-23T00:00:00Z' }

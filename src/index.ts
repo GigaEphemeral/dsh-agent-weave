@@ -4,6 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { compileRoleDirectory } from './l3-roles/role-loader.js'
 import { registerChainTool } from './l2-engine/chain-tool.js'
 import { registerGraphCommands } from './cli/graph-commands.js'
+import { registerVisualCommands } from './cli/graph-visual-commands.js'
 import { GraphEngineService } from './l2-engine/graph-service.js'
 import { logger } from './shared/logger.js'
 
@@ -42,21 +43,28 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   // 查找底层 delegate provider（spawn）
   const delegate = ctx.subagents.getProvider(config.baseProvider ?? 'spawn')
-  if (delegate === undefined) {
-    logger.error('weave', '找不到底层 subagent provider，跳过角色注册', new Error('spawn provider 未注册'), {
-      base_provider: config.baseProvider ?? 'spawn',
-    })
-    return
-  }
 
-  // 编译并注册全部角色（注册即 effect：插件卸载时自动撤销）
-  const providers = compileRoleDirectory(rolesDir, { skillsDir }, delegate)
-  for (const provider of providers) {
-    ctx.subagents.registerProvider(provider)
-    logger.info('role-loader', `注册角色 ${provider.name}`, {
-      role_id: provider.name,
-      inherits_parent_context: provider.inheritsParentContext,
-      agent_route_defaults: provider.agentRouteDefaults,
+  // 角色注册依赖 spawn provider；图命令/引擎不依赖，注册不受影响
+  if (delegate !== undefined) {
+    // 编译并注册全部角色（注册即 effect：插件卸载时自动撤销）
+    const providers = compileRoleDirectory(rolesDir, { skillsDir }, delegate)
+    for (const provider of providers) {
+      ctx.subagents.registerProvider(provider)
+      logger.info('role-loader', `注册角色 ${provider.name}`, {
+        role_id: provider.name,
+        inherits_parent_context: provider.inheritsParentContext,
+        agent_route_defaults: provider.agentRouteDefaults,
+      })
+    }
+    // 记录编译摘要
+    logger.info('weave', '角色注册完成', {
+      count: providers.length,
+      roles: providers.map((p) => ({ role_id: p.name, inherits_parent_context: p.inheritsParentContext })),
+      roles_dir: rolesDir,
+    })
+  } else {
+    logger.error('weave', '找不到底层 subagent provider，跳过角色注册（图命令不受影响）', new Error('spawn provider 未注册'), {
+      base_provider: config.baseProvider ?? 'spawn',
     })
   }
 
@@ -66,6 +74,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   // 注册 CLI 图命令（MVP-2 T4：validate / show / help）
   registerGraphCommands(ctx)
 
+  // 注册可视化命令（MVP-2 T12/T13/T14：watch / report / status）
+  registerVisualCommands(ctx)
+
   // 注册 ctx.graph 服务（MVP-2 T10）
   ctx.plugin(GraphEngineService, {
     defaultMaxIterations: 25,
@@ -73,10 +84,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     maxConcurrentChildren: 8,
   })
 
-  // 记录编译摘要
-  logger.info('weave', '角色注册完成', {
-    count: providers.length,
-    roles: providers.map((p) => ({ role_id: p.name, inherits_parent_context: p.inheritsParentContext })),
-    roles_dir: rolesDir,
+  // 图服务与命令已就绪
+  logger.info('weave', 'MVP-2 图引擎与命令就绪', {
+    graph_service: true,
+    commands: ['weave_graph_validate', 'weave_graph_show', 'weave_graph_help', 'weave_graph_watch', 'weave_graph_report', 'weave_graph_status'],
   })
 }

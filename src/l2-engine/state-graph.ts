@@ -37,11 +37,6 @@ interface ApprovalServiceLike {
   }): Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable' | string>
 }
 
-/** 带可选审批服务的 Context 形态（运行时 get 探测，避免编译期依赖 dsh-user-approval）。 */
-interface ApprovalContext extends Context {
-  approval?: ApprovalServiceLike
-}
-
 export interface StateGraph<T> {
   addNode(name: string, handler: NodeHandler<T>): this
   addEdge(from: string, to: string): this
@@ -162,7 +157,7 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
           // RES.10 §一.5：审批门执行前先请求审批（approval 服务为可选依赖，运行时探测）
           const gate = approvalGates.get(current)
-          const approvalService = (ctx as ApprovalContext).approval
+          const approvalService = (ctx.get('approval') as ApprovalServiceLike | undefined)
           if (gate && options.agent && approvalService) {
             const req: { agent: unknown; toolName: string; reason?: string; signal?: AbortSignal } = {
               agent: options.agent,
