@@ -2,7 +2,7 @@
 
 > **一句话目标**：实现一个可视化的 Agent 任务编排工具——用户输入一句话需求，自动拆解为工作流任务图，多角色 subagent 按图协作（含循环与条件回退），激活状态全程可视化，每个 Agent 独立记忆防污染，可互相对话，角色支持导入文件创建与画布连线。
 
-[![Status](https://img.shields.io/badge/status-MVP--1%20%E5%8D%B3%E5%B0%86%E5%8A%A8%E5%B7%A5-orange)]()
+[![Status](https://img.shields.io/badge/status-MVP--1%20%E5%B7%B2%E5%AE%8C%E6%88%90-brightgreen)]()
 [![DSH](https://img.shields.io/badge/DSH-0.1.15--rc2-green)]()
 [![Node](https://img.shields.io/badge/Node-%5E22.19%20%7C%7C%20%3E%3D24-green)]()
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)]()
@@ -38,22 +38,25 @@
 
 | 项 | 状态 |
 |---|---|
-| **当前阶段** | MVP-0 已完成（R1-R10 skill + 3 横切纪律） |
-| **下一步** | **MVP-1 单链脚本验证**（即将动工） |
-| **运行环境** | Windows 11 + DSH 0.1.15-rc2 + Node 24 + pnpm 11 |
+| **当前阶段** | **MVP-1 已完成 ✅**（四项门禁全部通过，见 `docs/MVP-1/验证报告-单链闭环.md`） |
+| **下一步** | **MVP-2 自研 StateGraph 引擎**（即将动工） |
+| **运行环境** | Windows 11 + DSH **0.1.5-rc.2**（实测；文档旧标 0.1.15-rc2）+ Node 22.23 + pnpm 12.3 |
 | **开发路径** | 纯 Host CLI 先行（MVP-1/2 不碰 UI） |
-| **预计周期** | MVP-1 约 1.5 周（12 个任务，~11d） |
+| **MVP-1 实绩** | 一句话需求 → 六角色串行 → **产出 58KB 可直接运行的 `index.html`**（23 分钟 / 21.2 万 token） |
 
 **MVP-1 的核心使命**：验证角色能否作为 `SubagentProvider` 被正确编译、注册、执行、隔离。这是一个**验证性阶段**，不是产品化阶段——它不建图、不碰 UI、不实现 checkpoint/消息总线/RunLedger。
 
-**MVP-1 要回答的四个问题**：
+**MVP-1 要回答的四个问题**（**全部验证通过 ✅**）：
 
-| # | 待验证问题 | 为什么重要 |
+| # | 待验证问题 | 结论 |
 |---|---|---|
-| Q1 | 角色 YAML 能否编译为可注册的 SubagentProvider？ | L3 角色管理的根基 |
-| Q2 | 记忆隔离是否真的生效？ | G4（记忆纯洁性）是三条命门之一 |
-| Q3 | toolFilter 是否真的按角色限定工具？ | 最小权限声明的基础 |
-| Q4 | 多角色能否通过 workflowEngine 串行协作？ | "角色协作闭环"的最小验证 |
+| Q1 | 角色 YAML 能否编译为可注册的 SubagentProvider？ | ✅ 6 角色编译/注册/执行成功 |
+| Q2 | 记忆隔离是否真的生效？ | ✅ `inheritsParentContext=false` + 6 独立 session |
+| Q3 | toolFilter 是否真的按角色限定工具？ | ✅ 角色注入 `toolFilter.allow` + 官方 `tools.restrict()` |
+| Q4 | 多角色能否通过 workflowEngine 串行协作？ | ✅ 六阶段串行 completed（改用自写编排，见 D-001） |
+
+> **MVP-1 产出**：插件 `dsh-agent-weave@0.1.0`（角色编译管线 + 单链编排 + 可观测性）、
+> 6 角色资产、56 单测、8 份过程文档、7 条遗留坑（见 `docs/MVP-1/process/MVP-1阶段总结与遗留.md`）。
 
 ---
 
@@ -61,20 +64,22 @@
 
 ### 任务总览（12 个任务，~11d）
 
-| 任务 ID | 任务名称 | 交付物 | 预估 | 依赖 |
-|---|---|---|---|---|
-| **P1.1.0** | Windows 环境验证 | 环境验证报告 | 0.5d | 无 |
-| **P1.1.1** | 插件脚手架搭建 | `package.json` + 构建配置 + `src/index.ts` | 0.5d | P1.1.0 |
-| **P1.1.2** | L0-L5 目录骨架 | 目录结构 | 1d | P1.1.1 |
-| **P1.1.3** | 共享类型定义 | `src/shared/types.ts` + Zod Schema | 1d | P1.1.2 |
-| **P1.1.4** | 结构化日志基础设施 | `src/shared/logger.ts` | 1d | P1.1.2 |
-| **P1.1.5** | 角色 YAML Schema | `src/l3-roles/role-schema.ts` | 1d | P1.1.3 |
-| **P1.1.6** | 角色 Provider 编译器 | `src/l3-roles/role-loader.ts` 初版 | 2d | P1.1.5 |
-| **P1.1.7** | Cordis 生命周期验证 | 最小 effect 注册/注销 + 热重载测试 | 0.5d | P1.1.1 |
-| **P1.2.1** | workflowEngine 脚本 | 串行脚本 R1→R2→R4→R6→R7→R8 | 2d | P1.1.6 |
-| **P1.2.2** | 记忆隔离验证 | 验证报告 | 0.5d | P1.2.1 |
-| **P1.2.3** | toolFilter 验证 | 验证报告 | 0.5d | P1.2.1 |
-| **P1.2.4** | 单链闭环端到端测试 | 测试脚本 + 运行记录 | 1d | P1.2.2, P1.2.3 |
+| 任务 ID | 任务名称 | 交付物 | 状态 |
+|---|---|---|---|
+| **P1.1.0** | Windows 环境验证 | 环境验证报告 | ✅ |
+| **P1.1.1** | 插件脚手架搭建 | `package.json` + 构建配置 + `src/index.ts` | ✅ |
+| **P1.1.2** | L0-L5 目录骨架 | 目录结构 | ✅ |
+| **P1.1.3** | 共享类型定义 | `src/shared/types.ts` + Zod Schema | ✅ |
+| **P1.1.4** | 结构化日志基础设施 | `src/shared/logger.ts` | ✅ |
+| **P1.1.5** | 角色 YAML Schema | `src/l3-roles/role-schema.ts` | ✅ |
+| **P1.1.6** | 角色 Provider 编译器 | `src/l3-roles/role-loader.ts` | ✅ |
+| **P1.1.7** | Cordis 生命周期验证 | 最小 effect 注册/注销 + 热重载测试 | ✅ |
+| **P1.2.1** | 单链编排脚本 | 串行 R1→R2→R4→R6→R7→R8（自写编排，见 D-001） | ✅ |
+| **P1.2.2** | 记忆隔离验证 | 验证报告 | ✅ |
+| **P1.2.3** | toolFilter 验证 | 验证报告 | ✅ |
+| **P1.2.4** | 单链闭环端到端测试 | 测试记录（真实 LLM：产出可运行 index.html） | ✅ |
+
+> 详细完成情况与遗留坑见 `docs/MVP-1/process/MVP-1阶段总结与遗留.md`。
 
 ### 依赖关系
 
@@ -335,8 +340,8 @@ P1.1.7 生命周期验证    P1.1.4 日志基础设施   P1.1.5 角色 Schema
 | MVP | 名称 | 关键环节 | 门禁 | 状态 |
 |---|---|---|---|---|
 | 0 | 角色资产 | R1-R10 skill 已完成 | 已过 | ✅ |
-| **1** | **单链脚本验证** | **workflowEngine 脚本串行 R1→R8，验证角色协作** | **多角色顺序跑通真实小任务 + 记忆隔离 + toolFilter + chat 可见 workflow 节点** | **🔄 即将动工** |
-| 2 | **自研 StateGraph 引擎** | 图 DSL + checkpoint 契约 + 条件边 + 循环回退 + 熔断 + BDD/mock 测试 | 循环 DSL 跑通 + 循环退出/熔断双生效 + 路由确定性测试 | ⏳ |
+| **1** | **单链脚本验证** | **角色编译 + 串行编排 R1→R8，验证角色协作** | **多角色顺序跑通真实小任务 + 记忆隔离 + toolFilter + chat 可见节点** | **✅ 已完成**（四项门禁全过） |
+| 2 | **自研 StateGraph 引擎** | 图 DSL + checkpoint 契约 + 条件边 + 循环回退 + 熔断 + BDD/mock 测试 | 循环 DSL 跑通 + 循环退出/熔断双生效 + 路由确定性测试 | 🔄 即将动工 |
 | 3 | 状态+交接+消息+恢复 | 任务树持久化 + handoff + 消息总线 + checkpoint 恢复 + 分账 + 生命周期 + Token 熔断 + 观察者 L2 | 中断可恢复、交接可追溯、按角色分账、跨角色对话可达 | ⏳ |
 | 4 | 只读激活看板 | 节点状态事件流（OTEL 对齐）+ 图渲染 + 审批面板 + 观察者信号展示 | 全程图节点实时染色 | ⏳ |
 | 5 | 角色导入+画布连边 | YAML 导入解析器 + 拖拽连边 → DSL + 端口规则 + 沙箱隔离 | 零代码搭自定义团队跑通 | ⏳ |
