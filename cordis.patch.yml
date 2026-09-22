@@ -17,3 +17,12 @@
 - insert:
     - id: dsh-agent-weave
       name: dsh-agent-weave
+
+# MVP-2 T16：dsh-turn-budget 兜底配置（fail-closed per-turn 资源治理）。
+# ⚠️ 插件当前未安装（社区包，未适配 DSH 0.1.5-rc.2，见 README 风险表）。
+#    配置段保留：安装插件后自动生效；未安装时 Cordis 忽略未知 id 配置。
+# - id: turn-budget
+#   config:
+#     maxStepsPerTurn: 16
+#     maxToolCallsPerTurn: 24
+#     maxProviderTokensPerTurn: 50000
