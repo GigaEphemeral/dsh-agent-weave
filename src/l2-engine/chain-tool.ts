@@ -19,13 +19,17 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { runChain, type ChainResult } from './chain-runner.js'
+import { runChain, chainLogPath, type ChainResult } from './chain-runner.js'
 import { buildMvp1Chain } from './mvp1-chain.js'
 import { logger } from '../shared/logger.js'
 
 export interface ChainToolResult {
   ok: boolean
   productionsRoot: string
+  /** 是否因用户 STOP 标志而中止（阶段边界检查）。 */
+  stopped: boolean
+  /** 链执行日志路径（用户可实时查看）。 */
+  logFile: string
   steps: Array<{
     roleId: string
     artifact: string
@@ -44,16 +48,18 @@ export async function executeChain(
   productionsRoot?: string,
 ): Promise<ChainToolResult> {
   const parent = exec.agent
+  const root = productionsRoot ?? join(process.cwd(), 'productions')
   if (parent === undefined) {
-    return { ok: false, productionsRoot: '', steps: [], error: '工具调用缺少 agent 上下文' }
+    return { ok: false, productionsRoot: root, stopped: false, logFile: '', steps: [], error: '工具调用缺少 agent 上下文' }
   }
   try {
-    const root = productionsRoot ?? join(process.cwd(), 'productions')
     const steps = buildMvp1Chain()
     const result: ChainResult = await runChain(ctx, parent, steps, userInput, root)
     return {
       ok: true,
       productionsRoot: result.productionsRoot,
+      stopped: result.stopped,
+      logFile: chainLogPath(result.productionsRoot),
       steps: result.steps.map((s) => ({
         roleId: s.roleId,
         artifact: s.artifactPath,
@@ -66,7 +72,9 @@ export async function executeChain(
     logger.error('chain-tool', '单链执行失败', error instanceof Error ? error : new Error(String(error)))
     return {
       ok: false,
-      productionsRoot: productionsRoot ?? join(process.cwd(), 'productions'),
+      productionsRoot: root,
+      stopped: false,
+      logFile: chainLogPath(root),
       steps: [],
       error: error instanceof Error ? error.message : String(error),
     }
@@ -79,7 +87,8 @@ export function registerChainTool(ctx: Context): () => void {
     name: 'weave_run_chain',
     description:
       '执行 MVP-1 单链：按 R1→R2→R4→R6→R7→R8 顺序调用六个角色子代理，每个角色独立 Session（记忆隔离），' +
-      '产物落盘 productions/<角色ID>/。返回各角色产物摘要。用于验证角色协作闭环。',
+      '产物落盘 productions/<角色ID>/。执行细节写入 productions/chain.log（可实时查看）；' +
+      '在 productions/ 下创建 STOP 文件可在阶段边界中止链。返回各角色产物摘要。',
     parameters: {
       user_input: {
         type: 'string',
@@ -94,6 +103,8 @@ export function registerChainTool(ctx: Context): () => void {
         properties: {
           ok: { type: 'boolean', required: true },
           productionsRoot: { type: 'string', required: true },
+          stopped: { type: 'boolean', required: true },
+          logFile: { type: 'string', required: true },
           steps: {
             type: 'array',
             items: {
@@ -116,7 +127,13 @@ export function registerChainTool(ctx: Context): () => void {
         const lines = v.steps.map(
           (s) => `  ${s.roleId}: ${s.stopReason} (${s.outputLength} 字符) -> ${s.artifact}`,
         )
-        return [{ type: 'text', text: `单链执行${v.ok ? '成功' : '失败'}：\n${lines.join('\n')}` }]
+        const head = v.stopped ? '单链被 STOP 中止' : `单链执行${v.ok ? '成功' : '失败'}`
+        return [
+          {
+            type: 'text',
+            text: `${head}：\n${lines.join('\n')}\n\n实时日志：${v.logFile}`,
+          },
+        ]
       },
     },
     async execute(args, exec) {

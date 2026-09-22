@@ -8,11 +8,18 @@
  * - fail-fast：角色 start 抛错则中止
  */
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
-import { runChain, resultToText, type ChainStep } from '../../src/l2-engine/chain-runner'
+import {
+  runChain,
+  resultToText,
+  stripCodeFence,
+  chainLogPath,
+  stopFlagPath,
+  type ChainStep,
+} from '../../src/l2-engine/chain-runner'
 
 /** 构造一个 fake Context：subagents.start 记录请求并按序返回。 */
 function fakeCtx(steps: Array<{ stopReason?: string; output?: string }>) {
@@ -138,6 +145,117 @@ describe('runChain', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('stripCodeFence（纯代码产物剥离 Markdown 包裹）', () => {
+  it('剥离 ```html 包裹', () => {
+    const wrapped = '```html\n<!DOCTYPE html>\n<html><body>hi</body></html>\n```'
+    expect(stripCodeFence(wrapped)).toBe('<!DOCTYPE html>\n<html><body>hi</body></html>')
+  })
+
+  it('剥离无语言标记的 ``` 包裹', () => {
+    expect(stripCodeFence('```\ncode here\n```')).toBe('code here')
+  })
+
+  it('无包裹时原样返回', () => {
+    expect(stripCodeFence('<!DOCTYPE html>\n<html></html>')).toBe('<!DOCTYPE html>\n<html></html>')
+  })
+
+  it('仅剥离最外层包裹（内部代码块保留）', () => {
+    const text = '```html\n<html>\n```\ninner\n```\n</html>\n```'
+    // 贪婪匹配最外层，内部保留
+    expect(stripCodeFence(text)).toContain('inner')
+  })
+})
+
+describe('纯代码产物落盘（.html 自动剥离包裹）', () => {
+  it('R6 的 index.html 产物落盘时剥离 ```html 包裹', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'weave-chain-'))
+    try {
+      const wrapped = '```html\n<!DOCTYPE html>\n<html><body><h1>井字棋</h1></body></html>\n```'
+      const { ctx } = fakeCtx([{ output: wrapped }])
+      const steps = [makeStep('R6-developer', 'index.html', '开发实现')]
+      await runChain(ctx, parent, steps, '做一个井字棋', root)
+      const content = readFileSync(join(root, 'R6-developer', 'index.html'), 'utf8')
+      expect(content.startsWith('<!DOCTYPE html>')).toBe(true)
+      expect(content).not.toContain('```')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('Markdown 产物（.md）不做剥离', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'weave-chain-'))
+    try {
+      const { ctx } = fakeCtx([{ output: '```md\n# 标题\n```' }])
+      const steps = [makeStep('R1-requirement', 'prd.md', '需求分析')]
+      await runChain(ctx, parent, steps, '任务', root)
+      const content = readFileSync(join(root, 'R1-requirement', 'prd.md'), 'utf8')
+      expect(content).toContain('```md')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('可观测性与中止（chain.log + STOP）', () => {
+  it('chain.log 记录链开始/阶段开始/阶段完成/链结束', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'weave-chain-'))
+    try {
+      const { ctx } = fakeCtx([{ output: 'PRD 内容' }, { output: '架构内容' }])
+      const steps = [
+        makeStep('R1-requirement', 'prd.md', '需求分析'),
+        makeStep('R2-architect', 'arch.md', '架构设计'),
+      ]
+      await runChain(ctx, parent, steps, '任务', root)
+      const log = readFileSync(join(root, 'chain.log'), 'utf8')
+      expect(log).toContain('链开始')
+      expect(log).toContain('阶段开始：需求分析')
+      expect(log).toContain('阶段完成：需求分析')
+      expect(log).toContain('阶段完成：架构设计')
+      expect(log).toContain('链结束')
+      // 含耗时字段
+      expect(log).toContain('elapsed_s')
+      // 含产物路径
+      expect(log).toContain('prd.md')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('STOP 标志在阶段边界中止链（不执行任何阶段）', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'weave-chain-'))
+    try {
+      writeFileSync(join(root, 'STOP'), '', 'utf8')
+      const { ctx, calls } = fakeCtx([{ output: 'x' }])
+      const steps = [makeStep('R1-requirement', 'prd.md', '需求分析')]
+      const result = await runChain(ctx, parent, steps, '任务', root)
+      expect(result.stopped).toBe(true)
+      expect(calls).toHaveLength(0)
+      const log = readFileSync(join(root, 'chain.log'), 'utf8')
+      expect(log).toContain('检测到 STOP 标志')
+      expect(log).toContain('链已中止')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('无 STOP 标志时正常跑完（stopped=false）', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'weave-chain-'))
+    try {
+      const { ctx } = fakeCtx([{ output: 'PRD' }])
+      const steps = [makeStep('R1-requirement', 'prd.md', '需求分析')]
+      const result = await runChain(ctx, parent, steps, '任务', root)
+      expect(result.stopped).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('chainLogPath / stopFlagPath 路径正确', () => {
+    expect(chainLogPath('C:/x')).toMatch(/chain\.log$/)
+    expect(stopFlagPath('C:/x')).toMatch(/STOP$/)
   })
 })
 

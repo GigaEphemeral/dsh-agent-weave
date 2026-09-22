@@ -11,10 +11,6 @@ capabilities:
   - 回归验证
 tools:
   - read
-  - write
-  - glob
-  - grep
-  - pwsh
 model:
   provider: huoshan-186
   model: DeepSeek-V4-Flash

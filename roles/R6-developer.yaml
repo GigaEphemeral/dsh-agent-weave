@@ -11,11 +11,6 @@ capabilities:
   - 单测编写
 tools:
   - read
-  - write
-  - edit
-  - glob
-  - grep
-  - pwsh
 model:
   provider: huoshan-186
   model: DeepSeek-V4-Flash

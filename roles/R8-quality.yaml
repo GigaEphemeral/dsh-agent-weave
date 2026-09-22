@@ -11,8 +11,6 @@ capabilities:
   - 门禁判定
 tools:
   - read
-  - glob
-  - grep
 model:
   provider: huoshan-186
   model: DeepSeek-V4-Flash

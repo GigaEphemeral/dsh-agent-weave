@@ -11,9 +11,6 @@ capabilities:
   - 接口细化
 tools:
   - read
-  - write
-  - glob
-  - grep
 model:
   provider: huoshan-186
   model: DeepSeek-V4-Flash
