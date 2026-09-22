@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import { compileRoleDirectory } from './l3-roles/role-loader.js'
 import { registerChainTool } from './l2-engine/chain-tool.js'
+import { registerGraphCommands } from './cli/graph-commands.js'
 import { logger } from './shared/logger.js'
 
 /**
@@ -60,6 +61,9 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   // 注册单链验证工具（MVP-1 验证用；MVP-2 由 StateGraph 取代）
   registerChainTool(ctx)
+
+  // 注册 CLI 图命令（MVP-2 T4：validate / show / help）
+  registerGraphCommands(ctx)
 
   // 记录编译摘要
   logger.info('weave', '角色注册完成', {
