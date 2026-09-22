@@ -4,6 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { compileRoleDirectory } from './l3-roles/role-loader.js'
 import { registerChainTool } from './l2-engine/chain-tool.js'
 import { registerGraphCommands } from './cli/graph-commands.js'
+import { GraphEngineService } from './l2-engine/graph-service.js'
 import { logger } from './shared/logger.js'
 
 /**
@@ -64,6 +65,13 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   // 注册 CLI 图命令（MVP-2 T4：validate / show / help）
   registerGraphCommands(ctx)
+
+  // 注册 ctx.graph 服务（MVP-2 T10）
+  ctx.plugin(GraphEngineService, {
+    defaultMaxIterations: 25,
+    logTrajectory: true,
+    maxConcurrentChildren: 8,
+  })
 
   // 记录编译摘要
   logger.info('weave', '角色注册完成', {
