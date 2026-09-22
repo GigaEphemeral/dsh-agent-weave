@@ -40,6 +40,8 @@ interface ApprovalServiceLike {
 export interface StateGraph<T> {
   addNode(name: string, handler: NodeHandler<T>): this
   addEdge(from: string, to: string): this
+  /** 声明式循环边：`from → to` 最多回退 maxIter 次，用尽后走审批/终止。 */
+  addLoopEdge(from: string, to: string, maxIter: number): this
   addConditionalEdge(from: string, condition: ConditionHandler<T>, maxIter?: number): this
   addApprovalGate(name: string, options: { toolName: string; reason?: string }): this
   run(initialState: T, options: RunOptions<T>): Promise<GraphExecutionResult<T>>
@@ -92,6 +94,11 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
     addEdge(from, to) {
       edges.push({ from, to, type: 'seq' })
+      return this
+    },
+
+    addLoopEdge(from, to, maxIter) {
+      edges.push({ from, to, type: 'loop', maxIter })
       return this
     },
 

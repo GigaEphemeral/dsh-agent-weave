@@ -63,12 +63,12 @@ export async function runGraphMock(ctx: Context, spec: GraphDefinitionSpec, bus:
     }
   }
 
-  // 边：seq/loop 走 addEdge；cond 转条件函数（基于 when 表达式字符串用 evaluateCondition）
+  // 边：seq 走 addEdge；loop 走 addLoopEdge；cond 转条件函数（基于 when 表达式字符串用 evaluateCondition）
   for (const edge of spec.edges) {
     if (edge.type === 'seq') {
       graph.addEdge(edge.from, edge.to)
-    } else if (edge.type === 'loop') {
-      graph.addEdge(edge.from, edge.to)
+    } else if (edge.type === 'loop' && edge.maxIter !== undefined) {
+      graph.addLoopEdge(edge.from, edge.to, edge.maxIter)
     } else if (edge.type === 'cond' && edge.when) {
       // cond 边：经 evaluateCondition 求值（从声明式 when 构建条件函数）
       const when = edge.when

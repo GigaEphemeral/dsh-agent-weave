@@ -79,10 +79,12 @@ export class GraphEngineService extends Service {
       }
     }
 
-    // 边：seq 走 addEdge；loop 也通过 addEdge 承载（引擎按 type 处理）
+    // 边：seq 走 addEdge；loop 走 addLoopEdge（含 maxIter）
     for (const edge of parsed.edges) {
-      if (edge.type === 'seq' || edge.type === 'loop') {
+      if (edge.type === 'seq') {
         graph.addEdge(edge.from, edge.to)
+      } else if (edge.type === 'loop' && edge.maxIter !== undefined) {
+        graph.addLoopEdge(edge.from, edge.to, edge.maxIter)
       }
       // cond 边：MVP-2 由 CLI/引擎层通过 evaluateCondition + resolveNextNode 处理，
       // 声明式 edges 已在 fromDefinition 内按 type 传入——这里 seq/loop 已覆盖。
