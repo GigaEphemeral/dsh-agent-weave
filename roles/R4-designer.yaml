@@ -1,0 +1,32 @@
+# R4 详细设计师（MVP-1 验证用角色）
+schema_version: '1.0'
+id: R4-designer
+name: 详细设计师
+system_prompt_ref: R4-designer/SKILL.md
+traits:
+  - 可测试性
+  - 边界细致
+capabilities:
+  - 测试方案设计
+  - 接口细化
+tools:
+  - read
+  - write
+  - glob
+  - grep
+model:
+  provider: deepseek
+  model: deepseek-v4-pro
+memory_scope: private
+lifecycle: on-demand
+max_concurrent_children: 1
+quality_gate:
+  - 测试分层完整
+  - 边界输入覆盖
+token_budget: 2000
+handoff:
+  upstream:
+    - R2-architect
+  downstream:
+    - R6-developer
+  edge_type: seq

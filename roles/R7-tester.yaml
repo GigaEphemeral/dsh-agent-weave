@@ -1,0 +1,33 @@
+# R7 测试员（MVP-1 验证用角色）
+schema_version: '1.0'
+id: R7-tester
+name: 测试员
+system_prompt_ref: R7-tester/SKILL.md
+traits:
+  - 怀疑
+  - 证据链
+capabilities:
+  - 测试执行
+  - 回归验证
+tools:
+  - read
+  - write
+  - glob
+  - grep
+  - pwsh
+model:
+  provider: deepseek
+  model: deepseek-v4-pro
+memory_scope: private
+lifecycle: on-demand
+max_concurrent_children: 1
+quality_gate:
+  - 回归基线对比
+  - 失败附复现
+token_budget: 2000
+handoff:
+  upstream:
+    - R6-developer
+  downstream:
+    - R8-quality
+  edge_type: seq

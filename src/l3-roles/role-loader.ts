@@ -1,7 +1,7 @@
 /**
  * 角色 Provider 编译器（MVP-1 P1.1.6）。
  *
- * 将角色 YAML 编译为 RoleProfile（D-001 决策）。
+ * 将角色 YAML 编译为可注册到 ctx.subagents 的 SubagentProvider（D-001 决策修正版）。
  *
  * 编译流水线（文档 §3.2）：
  *   ① 解析 system_prompt_ref 路径（相对 skillsDir 或绝对路径）
@@ -9,15 +9,20 @@
  *   ③ 映射字段：name ← id，persona ← skill 内容，toolFilter ← tools，
  *      agentOptions ← { provider, model }（完整对象，🐛 #4311/#4313），
  *      depthLimit ← max_concurrent_children，inheritsParentContext ← (memory_scope === 'shared')
- *   ④ 返回 RoleProfile
+ *   ④ 包装为 SubagentProvider：start() 注入角色字段后委托底层 delegate（spawn）
  *
  * 关键约束：
  * - 路径逃逸防护：解析后的路径必须位于 skillsDir 之内（编译期校验）
  * - 不缓存 skill 内容：每次编译重新读取（热重载后不使用过期内容）
- * - 同步函数：异步 IO 由调用方处理（Cordis apply 是同步的）
+ * - 同步编译：skill 读取为同步 IO（Cordis apply 是同步的）
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
+import type {
+  ResolvedSubagentStartRequest,
+  SubagentProvider,
+  SubagentRun,
+} from '@deepseek-ai/dsh-subagent'
 import { RoleLoadError, type RoleDefinition, type RoleProfile } from '../shared/types.js'
 import { fingerprint } from '../shared/logger.js'
 import { parseRoleYaml } from './role-schema.js'
@@ -53,14 +58,14 @@ export function resolveSystemPromptPath(skillsDir: string, ref: string): string 
 }
 
 /**
- * 将角色 YAML 编译为 RoleProfile。
+ * 将角色 YAML 编译为 RoleProfile（纯数据形态）。
  *
  * @param role - 通过 Zod Schema 校验的角色定义
  * @param options - 编译选项（skillsDir 等）
- * @returns 供 workflowEngine 组装 SubagentStartRequest 的角色画像
+ * @returns 角色画像（供日志、测试、请求组装使用）
  * @throws {RoleLoadError} skill 文件不存在、读取失败或路径逃逸
  */
-export function compileRoleToProvider(role: RoleDefinition, options: CompileOptions): RoleProfile {
+export function compileRoleProfile(role: RoleDefinition, options: CompileOptions): RoleProfile {
   const target = resolveSystemPromptPath(options.skillsDir, role.system_prompt_ref)
   const safeTarget = assertInsideSkillsDir(options.skillsDir, target, role.id)
 
@@ -98,6 +103,56 @@ export function compileRoleToProvider(role: RoleDefinition, options: CompileOpti
         downstream: [...role.handoff.downstream],
         edge_type: role.handoff.edge_type,
       },
+    },
+  }
+}
+
+/**
+ * 将角色 YAML 编译为可注册的 SubagentProvider。
+ *
+ * 官方契约（D-001）：SubagentProvider 是传输层抽象，capabilities 为布尔标志；
+ * persona/toolFilter/agentOptions 属于 start 请求。因此角色以「包装 provider」
+ * 形态存在：start() 在请求中注入角色字段后，委托给底层 delegate（spawn）。
+ *
+ * @param role - 通过 Zod Schema 校验的角色定义
+ * @param options - 编译选项（skillsDir 等）
+ * @param delegate - 底层传输 provider（通常为 `spawn`，从 ctx.subagents.getProvider('spawn') 获取）
+ * @returns 可注册到 ctx.subagents 的 SubagentProvider
+ * @throws {RoleLoadError} skill 文件不存在、读取失败或路径逃逸
+ */
+export function compileRoleToProvider(
+  role: RoleDefinition,
+  options: CompileOptions,
+  delegate: Pick<SubagentProvider, 'start'>,
+): SubagentProvider {
+  const profile = compileRoleProfile(role, options)
+
+  const capabilities = {
+    agentOptions: true,
+    outputSchema: false,
+    depthLimit: true,
+    toolFilter: true,
+    persona: true,
+  }
+
+  return {
+    name: profile.name,
+    capabilities,
+    inheritsParentContext: profile.inheritsParentContext,
+    agentRouteDefaults: profile.agentOptions,
+    async start(request: ResolvedSubagentStartRequest): Promise<SubagentRun> {
+      // 注入角色字段到请求（角色字段优先于调用方默认）
+      const injected: ResolvedSubagentStartRequest = {
+        ...request,
+        persona: profile.persona,
+        toolFilter: { allow: [...profile.toolFilter] },
+        agentOptions: {
+          provider: profile.agentOptions.provider,
+          model: profile.agentOptions.model,
+        },
+        ...(profile.depthLimit !== undefined ? { maxDepth: profile.depthLimit } : {}),
+      }
+      return delegate.start(injected)
     },
   }
 }
@@ -148,10 +203,23 @@ export function loadRoleDefinitions(rolesDir: string): RoleDefinition[] {
   return roles
 }
 
-/** 编译目录内全部角色为 RoleProfile（供插件 apply 批量注册使用）。 */
-export function compileRoleDirectory(rolesDir: string, options: CompileOptions): RoleProfile[] {
+/** 编译目录内全部角色为 SubagentProvider（供插件 apply 批量注册使用）。 */
+export function compileRoleDirectory(
+  rolesDir: string,
+  options: CompileOptions,
+  delegate: Pick<SubagentProvider, 'start'>,
+): SubagentProvider[] {
   const roles = loadRoleDefinitions(rolesDir)
-  return roles.map((role) => compileRoleToProvider(role, options))
+  return roles.map((role) => compileRoleToProvider(role, options, delegate))
+}
+
+/** 编译目录内全部角色为 RoleProfile（纯数据，供日志/验证）。 */
+export function compileRoleProfileDirectory(
+  rolesDir: string,
+  options: CompileOptions,
+): RoleProfile[] {
+  const roles = loadRoleDefinitions(rolesDir)
+  return roles.map((role) => compileRoleProfile(role, options))
 }
 
 /**

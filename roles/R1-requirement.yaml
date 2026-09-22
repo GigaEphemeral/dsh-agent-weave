@@ -1,0 +1,32 @@
+# R1 需求分析师（MVP-1 验证用角色）
+schema_version: '1.0'
+id: R1-requirement
+name: 需求分析师
+system_prompt_ref: R1-requirement/SKILL.md
+traits:
+  - 发散
+  - 收敛
+  - 边界思维
+capabilities:
+  - 需求边界扩充
+  - 验收基线定义
+tools:
+  - read
+  - write
+  - glob
+  - grep
+model:
+  provider: deepseek
+  model: deepseek-v4-pro
+memory_scope: private
+lifecycle: on-demand
+max_concurrent_children: 1
+quality_gate:
+  - 产出含验收基线
+  - 产出含 In/Out
+token_budget: 2000
+handoff:
+  upstream: []
+  downstream:
+    - R2-architect
+  edge_type: seq

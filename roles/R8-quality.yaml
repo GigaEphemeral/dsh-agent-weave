@@ -1,0 +1,30 @@
+# R8 质量审核员（MVP-1 验证用角色）
+schema_version: '1.0'
+id: R8-quality
+name: 质量审核员
+system_prompt_ref: R8-quality/SKILL.md
+traits:
+  - 双轴审查
+  - 分级问题
+capabilities:
+  - 代码审核
+  - 门禁判定
+tools:
+  - read
+  - glob
+  - grep
+model:
+  provider: deepseek
+  model: deepseek-v4-pro
+memory_scope: private
+lifecycle: on-demand
+max_concurrent_children: 1
+quality_gate:
+  - P0/P1/P2 分级
+  - 结论可复核
+token_budget: 2000
+handoff:
+  upstream:
+    - R7-tester
+  downstream: []
+  edge_type: seq

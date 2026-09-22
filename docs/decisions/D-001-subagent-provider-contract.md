@@ -54,4 +54,26 @@ interface SubagentProvider {
 官方 DSH 若提供「角色级 provider」的一等抽象（如 `dsh-plugin-product-subagents` 适配），可重新评估是否改走包装 provider 路线。
 
 ---
-**关联**：`docs/MVP-1/0-设计.md` §3.2/§4.2、`docs/001-开发契约.md` §5.2、`docs/env-verification.md` §二
+## 补充（2026-09-22，契约复核）：workflowEngine 无法按角色选择 provider
+
+复核官方 `dsh-workflow-worker-thread` 实现（0.1.5-rc.2）确认：
+
+| 事实 | 证据 |
+|---|---|
+| `agent(prompt, opts)` 支持的 options | `SUPPORTED_AGENT_OPTIONS = {label, phase, schema, provider, model}`（runtime.js:20） |
+| `opts.provider` 的语义 | 进入 `agentOptions.provider`（LLM 路由覆盖），**不是** `ctx.subagents.start(name)` 的 provider 选择（index.js:493-495） |
+| 子代理 provider 选择 | 仅在 `WorkflowStartRequest.subagentProvider`（run 级，默认 `spawn`），一次 run 只有一个 provider（index.js:875） |
+
+**结论**：设计文档 §4.5 的 `workflowEngine.agent(prompt, { provider: 'R1-requirement' })`（用 provider 名选角色）**无法实现**——`provider` 会被当成 LLM 路由，导致 spawn 到不存在的模型路由。
+
+**修正后的 MVP-1 单链方案（P1.2.1）**：
+1. **角色注册**：每个角色编译为 `SubagentProvider`（包装 spawn，`name=角色ID`，`start()` 内注入 persona/toolFilter/agentOptions 后委托 `startInProcessRun`），注册到 `ctx.subagents`。
+2. **单链执行**：不依赖 workflowEngine 的 `agent()` 按角色切 provider；改为自写编排脚本，按序调用 `ctx.subagents.start(角色ID, request)` 完成 R1→R8 串行（Q1-Q3 验证路径不变）。
+3. **门禁 4（chat 可见 workflow 节点）**：单独用 workflowEngine 跑一个 provider=`spawn` 的 demo run，验证 `workflow/*` 事件在 chat 可见（证明 workflowEngine 集成可用，角色经注册表供其消费）。
+
+## 撤销条件
+
+官方 workflowEngine 若新增 per-call 子代理 provider 选择，可回归文档 §4.5 的原始写法。
+
+---
+**关联**：`docs/MVP-1/0-设计.md` §3.2/§4.2/§4.5、`docs/001-开发契约.md` §5.2、`docs/env-verification.md` §二

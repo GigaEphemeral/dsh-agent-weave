@@ -1,0 +1,32 @@
+# R2 架构师（MVP-1 验证用角色）
+schema_version: '1.0'
+id: R2-architect
+name: 架构师
+system_prompt_ref: R2-architect/SKILL.md
+traits:
+  - 模块化
+  - 契约思维
+capabilities:
+  - 技术方案设计
+  - 契约核查
+tools:
+  - read
+  - write
+  - glob
+  - grep
+model:
+  provider: deepseek
+  model: deepseek-v4-pro
+memory_scope: private
+lifecycle: on-demand
+max_concurrent_children: 1
+quality_gate:
+  - 契约与限制已核查
+  - 模块职责表完整
+token_budget: 2000
+handoff:
+  upstream:
+    - R1-requirement
+  downstream:
+    - R4-designer
+  edge_type: seq
