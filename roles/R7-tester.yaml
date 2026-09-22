@@ -17,7 +17,7 @@ tools:
   - pwsh
 model:
   provider: huoshan-186
-  model: deepseek-v4-pro
+  model: DeepSeek-V4-Flash
 memory_scope: private
 lifecycle: on-demand
 max_concurrent_children: 1
