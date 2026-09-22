@@ -105,6 +105,7 @@
 | 测试 | `tests/`（23 文件，181 用例） |
 | 合规报告 | `docs/MVP-2/资源合规检查.md` |
 | 验收脚本 | `test-env/verify-mvp2.ps1` |
+| **验收操作指南** | **`docs/MVP-3/MVP-2验收测试操作指南.md`（人工验收 5 项，2026-09-23）** |
 | HTML 报告样例 | `reports/graph-*.html` |
 
 ---
