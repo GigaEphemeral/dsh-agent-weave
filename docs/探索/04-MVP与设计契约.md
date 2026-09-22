@@ -105,6 +105,19 @@ GraphDefinitionSpec {
 - **并行分支合并**：汇聚后一次 checkpoint；字段冲突**默认 `reject-on-conflict`**（两分支写同一字段 → 抛错 + RunLedger 记冲突，不静默覆盖）；`merge` 仅对声明 `@mergeable` 的字段启用。冲突检测在**引擎合并阶段**执行，参考 agent-coherence 的 MESI + 乐观并发协议。
 - **资源生命周期约束（Cordis，精确约束）** ：引擎/总线/RunLedger 内**不得使用裸 `setTimeout`/`setInterval`/`fs.open`/`new Database()`**；所有非 Cordis 一等服务的资源必须 `ctx.effect(() => {...; return disposer})` 注册，disposer 完整释放。⚠️ Discussion #2854：HMR recompose 在 fiber disposal 与 recompose 间有竞态，非 effect 资源可能泄漏或过早清理（案例：第三方 bundle 插件 boot 后 ~3s 被静默禁用）。**热重载测试作为 MVP-2 门禁一部分**——插件热重载后验证无资源泄漏。RunLedger 建议直接用 `ctx.storageDomain`（一等服务，框架管生命周期）。
 
+**产物路径约束（FIX.6，MVP-2 强制）** ：
+
+- `graphId` 和产物根路径**必须**从 `ctx`（会话工作区）获取，**禁止**使用 `process.cwd()`
+- `graphId` 由引擎生成（格式：`graph-{timestamp}-{random}`）
+- 产物根路径从 `ctx.workspace` 或 `ctx.session.workspace` 获取（具体 API 待 RES.3 确认）
+- 所有 `art://` 引用基于产物根路径解析
+- 单元测试必须覆盖：不同会话工作区下，产物落盘到正确路径
+
+**为什么是契约级约束**：
+- `process.cwd()` 返回 DSH 进程启动目录，与用户会话工作区无关
+- checkpoint 恢复时若路径错误，会读不到产物
+- MVP-3 的 `art://` 引用依赖此约束
+
 ### 4.3 消息总线契约（MVP-3 前）
 
 ```
@@ -293,7 +306,7 @@ role:
 | `dsh-plugin-product-subagents` | 社区 | ✅ 社区（`shaokeyibb` 维护，MIT），npm 当前版本 0.3.1 | 补充版本与许可 |
 | `dsh-plugin-subagent-director` | 社区 | ✅ 社区（`SeverusZh` 维护，MIT） | 补充维护者与许可 |
 | `pi2dsh` | 社区 | ✅ 社区（`weijiafu14` 维护，MIT） | 补充维护者与许可 |
-| `dsh-agent-teams`（`NanmiCoder`） | 不依赖 | ✅ 支持矩阵：推荐 `0.1.5-rc.1`，**不包含 0.1.15-rc2** | 确认不依赖的正确性 |
+| `dsh-agent-teams`（`NanmiCoder`） | 不依赖 | ✅ 支持矩阵：推荐 `0.1.5-rc.1`，**不包含 0.1.5-rc2** | 确认不依赖的正确性 |
 
 
 ## 十、遗漏项补全清单

@@ -29,16 +29,26 @@
 | 1 | 多角色顺序跑通真实小任务 | ✅ | 六阶段 completed，1,376s，产出 95K 字符 |
 | 2 | 产物落盘 | ✅ | 6 产物含 58KB 可运行 `index.html` |
 | 3 | 记忆隔离验证通过 | ✅ | 6 角色独立 session + `inherits_parent_context=false` |
-| 4 | chat 中可见 workflow 节点 | ✅ | 用户实测观察节点树 + session `subagent/catalog` 事件 |
+| 4 | chat 中可见 workflow 节点 | ✅* | 用户实测观察节点树 + session `subagent/catalog` 事件（*见下方实现偏离说明） |
+
+> **【实现偏离说明】（FIX.3）**
+>
+> 门禁 4 实际通过 **subagent 事件**（`subagent/catalog`）实现，**并非** workflowEngine 的
+> `workflow/*` 事件。原因：官方 `workflowEngine.agent()` 的 `provider` 是 LLM 路由覆盖，
+> 无法按角色切子代理 provider（见 D-001）。
+>
+> **【MVP-2 影响】**：MVP-2 的 UI 节点树应消费自研 **`graph/*` 事件**，不再依赖 subagent 事件。
+> `graph/*` 事件类型：`node-start` / `node-end` / `node-error` / `edge-traversed` /
+> `loop-iteration` / `checkpoint-written`。
 
 ### 1.3 质量数据
 
-| 指标 | 值 |
-|---|---|
-| 单元测试 | **56 个全绿**（6 个测试文件） |
-| typecheck | `tsc --noEmit` 0 error（host + client） |
-| 构建 | `lib/index.js` + `lib/client.js`，无 `.ts` 残留 |
-| 真实端到端 | 一句话 → 六角色 → 可运行游戏（23 分钟 / 21.2 万 token） |
+| 指标 | 值                                                 |
+|---|---------------------------------------------------|
+| 单元测试 | **56 个全绿**（6 个测试文件）                               |
+| typecheck | `tsc --noEmit` 0 error（host + client）             |
+| 构建 | `lib/index.js` + `lib/client.js`，无 `.ts` 残留       |
+| 真实端到端 | 一句话 → 六角色 → 可运行简单web单体游戏（23 分钟 / 21.2 万 token (82,365 输入 + 129,793 输出)） |
 
 ## 二、交付物索引
 
@@ -65,6 +75,27 @@
 **影响**：简单任务评估阶段偏慢偏重（R2 207s + R4 394s）。
 
 **建议**：MVP-2 图编排时引入「任务类型 → 角色集/深度」映射；或增加轻量角色变体。
+
+> ### 角色 Skill 设计方向（FIX.7 升级）
+>
+> **问题本质**：R1-R8 的 Skill 来自 `1skillCode`，是为**大型 TS 工程项目**设计的。
+> 面对轻量任务（如井字棋），角色会产出大量「正确但无用」的文档。
+>
+> **根因**：角色 Skill 缺少「任务类型适配层」。核心能力（如需求分析）与任务类型
+> （如轻量/标准/大型）耦合在同一个 Skill 文件中。
+>
+> **MVP-2 设计输入**：
+> - 建议引入「核心能力层 + 任务适配层」分离
+>   - 核心能力层：该角色的不变职责（方法论、输出结构）
+>   - 任务适配层：按任务类型配置的深度、输出格式、工具集
+> - 示例（R4 设计师）：
+>   - `CORE.md`：详细设计方法论
+>   - `adapters/lightweight.md`：轻量任务（单文件、跳过 UML）
+>   - `adapters/standard.md`：标准任务（完整设计文档）
+>   - `adapters/enterprise.md`：企业级（含 DDD 建模）
+>
+> **MVP-2 是否实现**：暂不实现（SKILL 系列延后），但 MVP-2 的 `roleRef`
+> 设计必须预留「适配层」扩展点。
 
 ### 🔴 P1-坑2：产物路径依赖 `process.cwd()`
 
@@ -131,6 +162,8 @@
 | `RoleDefinitionSchema` | 图 DSL 的 `roleRef` 校验 |
 | `chain-runner` 编排逻辑 | 演进为 StateGraph 引擎（加条件边/循环/checkpoint） |
 | `chain.log` 可观测模式 | 演进为 RunLedger 事件流（对齐 OTel） |
+| **事件流归属（FIX.3）** | **UI 节点树消费自研 `graph/*` 事件**（node-start/end/error、edge-traversed、loop-iteration、checkpoint-written），不再依赖 subagent 事件 |
+| **角色 persona 根因（FIX.7）** | 角色 Skill 引入「核心能力层 + 任务适配层」分离；`roleRef` 预留适配层扩展点 |
 | 记忆隔离验证结论 | 节点执行继续复用 `inheritsParentContext=false` |
 | 踩坑记录（6 条） | 设计期规避 |
 
