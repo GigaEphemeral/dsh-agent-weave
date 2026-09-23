@@ -78,8 +78,11 @@ export function chainLog(
   msg: string,
   data?: Record<string, unknown>,
 ): void {
+  const now = new Date()
   const entry = {
-    time: new Date().toISOString(),
+    // R44：日志时间戳用东八区 ISO 8601 带偏移（内部时间仍 epoch，展示层转时区）
+    time: new Date(now.getTime() + 8 * 3600 * 1000).toISOString().replace('Z', '+08:00'),
+    time_local: now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }),
     level,
     msg,
     ...(data ?? {}),

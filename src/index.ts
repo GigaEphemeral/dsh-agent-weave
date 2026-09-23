@@ -5,6 +5,7 @@ import { compileRoleDirectory } from './l3-roles/role-loader.js'
 import { registerChainTool } from './l2-engine/chain-tool.js'
 import { registerGraphCommands } from './cli/graph-commands.js'
 import { registerVisualCommands } from './cli/graph-visual-commands.js'
+import { registerGraphRunCommand } from './cli/graph-run-commands.js'
 import { GraphEngineService } from './l2-engine/graph-service.js'
 import { logger } from './shared/logger.js'
 
@@ -40,13 +41,13 @@ function resolveDir(configPath: string | undefined, fallback: string): string {
 export function apply(ctx: Context, config: Config = {}): void {
   const rolesDir = resolveDir(config.rolesDir, 'roles')
   const skillsDir = resolveDir(config.skillsDir, 'skills')
+  const baseProviderName = config.baseProvider ?? 'spawn'
 
-  // 查找底层 delegate provider（spawn）
-  const delegate = ctx.subagents.getProvider(config.baseProvider ?? 'spawn')
+  // 角色注册（延迟重试，等待 spawn provider 就绪）
+  const tryRegisterRoles = (): boolean => {
+    const delegate = ctx.subagents.getProvider(baseProviderName)
+    if (delegate === undefined) return false
 
-  // 角色注册依赖 spawn provider；图命令/引擎不依赖，注册不受影响
-  if (delegate !== undefined) {
-    // 编译并注册全部角色（注册即 effect：插件卸载时自动撤销）
     const providers = compileRoleDirectory(rolesDir, { skillsDir }, delegate)
     for (const provider of providers) {
       ctx.subagents.registerProvider(provider)
@@ -56,37 +57,45 @@ export function apply(ctx: Context, config: Config = {}): void {
         agent_route_defaults: provider.agentRouteDefaults,
       })
     }
-    // 记录编译摘要
     logger.info('weave', '角色注册完成', {
       count: providers.length,
       roles: providers.map((p) => ({ role_id: p.name, inherits_parent_context: p.inheritsParentContext })),
       roles_dir: rolesDir,
     })
-  } else {
-    logger.error('weave', '找不到底层 subagent provider，跳过角色注册（图命令不受影响）', new Error('spawn provider 未注册'), {
-      base_provider: config.baseProvider ?? 'spawn',
-    })
+    return true
   }
 
-  // 注册单链验证工具（MVP-1 验证用；MVP-2 由 StateGraph 取代）
+  if (!tryRegisterRoles()) {
+    // 轮询等待 spawn provider（最多 5 秒，每 100ms 一次）
+    let attempts = 0
+    const maxAttempts = 50
+    const timer = setInterval(() => {
+      attempts++
+      if (tryRegisterRoles() || attempts >= maxAttempts) {
+        clearInterval(timer)
+        if (attempts >= maxAttempts) {
+          logger.error('weave', '等待 spawn provider 超时，跳过角色注册（图命令不受影响）', new Error('spawn provider 未注册'), {
+            base_provider: baseProviderName,
+          })
+        }
+      }
+    }, 100)
+    // 插件卸载时清除定时器
+    ctx.effect(() => () => clearInterval(timer))
+  }
+
+  // 以下完全保持不变
   registerChainTool(ctx)
-
-  // 注册 CLI 图命令（MVP-2 T4：validate / show / help）
   registerGraphCommands(ctx)
-
-  // 注册可视化命令（MVP-2 T12/T13/T14：watch / report / status）
   registerVisualCommands(ctx)
-
-  // 注册 ctx.graph 服务（MVP-2 T10）
+  registerGraphRunCommand(ctx) // 问题 2：真实图执行入口
   ctx.plugin(GraphEngineService, {
     defaultMaxIterations: 25,
     logTrajectory: true,
     maxConcurrentChildren: 8,
   })
-
-  // 图服务与命令已就绪
   logger.info('weave', 'MVP-2 图引擎与命令就绪', {
     graph_service: true,
-    commands: ['weave_graph_validate', 'weave_graph_show', 'weave_graph_help', 'weave_graph_watch', 'weave_graph_report', 'weave_graph_status'],
+    commands: ['weave_graph_validate', 'weave_graph_show', 'weave_graph_help', 'weave_graph_watch', 'weave_graph_report', 'weave_graph_status', 'weave_run_graph'],
   })
 }

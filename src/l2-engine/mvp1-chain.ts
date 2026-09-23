@@ -98,9 +98,15 @@ ${HARD_RULES}
 ${design?.summary ?? '（无上游产物）'}
 完整设计路径：${design?.path ?? 'N/A'}
 
-请直接产出**完整可运行的代码**（按上游设计确定的技术形态）：
-- 若为单文件 Web 应用：输出完整 index.html（HTML + CSS + JS 全部内联，可直接双击运行）
-- 输出纯代码，**不要用 Markdown 代码块包裹**（不要 \`\`\`html 标记），不要任何说明文字
+请直接产出**核心可运行的 Python 后端代码**（按上游设计确定的技术形态），重点：
+- 输出 ${'`'}backend.py${'`'}：一个自包含 Python 3 标准库后端（http.server + sqlite3 + urllib），
+  实现全部 REST API（/api/etfs、/api/sync/today、/api/history/init、/api/history/status、
+  /api/screen、/api/calendar、/api/backfill、/api/kline）+ 静态文件服务。
+- 数据源：东方财富 push2 拉 ETF 全列表（fs=b:MK0021,b:MK0022,b:MK0023,b:MK0024，fields=f12,f14,f2,f15,f16,f17,f18），
+  腾讯 qt.gtimg.cn 实时行情（GBK，字段3=收盘、5=开盘），腾讯 web.ifzq.gtimg.cn 历史日K（qfqday 数组）。
+- SQLite 表：etf_meta(code,name,market) + etf_daily(code,trade_date,open,close)。
+- 规则引擎：JSON 规则 {type: consecutive_up|consecutive_down|up_then_down, n, lookback}，内存计算连涨/连跌。
+- 输出纯代码，**不要用 Markdown 代码块包裹**，不要任何说明文字；单文件、可直接 python 运行。
 ${HARD_RULES}
 
 现在直接输出代码。`
