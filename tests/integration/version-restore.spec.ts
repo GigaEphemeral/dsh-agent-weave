@@ -1,4 +1,4 @@
-/**
+﻿/**
  * version-restore 集成测试（MVP-2 T20：版本恢复 3 断言）。
  *
  * 场景：相同→恢复 / 不同→VERSION_MISMATCH / 无→null。
@@ -35,7 +35,7 @@ class MemoryStore implements CheckpointStore {
 describe('T20 graphVersion 恢复', () => {
   it('版本相同 → 恢复状态/迭代/节点', async () => {
     const store = new MemoryStore()
-    const cb = createCheckpointCallback(store, 'graph-1', '0.1.0', 'hash')
+    const cb = createCheckpointCallback(store, 'graph-1')
     await cb({
       graphId: 'graph-1',
       graphVersion: '0.1.0',
@@ -55,7 +55,7 @@ describe('T20 graphVersion 恢复', () => {
 
   it('版本不同 → VERSION_MISMATCH', async () => {
     const store = new MemoryStore()
-    const cb = createCheckpointCallback(store, 'graph-1', '0.0.9', 'hash')
+    const cb = createCheckpointCallback(store, 'graph-1')
     await cb({
       graphId: 'graph-1',
       graphVersion: '0.0.9',

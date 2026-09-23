@@ -22,21 +22,50 @@ export class ConditionEvalError extends Error {
   }
 }
 
+/** NEW-5/NEW-6：字段字符串长度上限（R34）。 */
+const FIELD_STRING_MAX = 10_000
+/** NEW-6：表达式总长度上限（R34）。 */
+const EXPR_MAX = 2_000
+
 /**
  * 求值条件表达式（`state.xxx` 替换为实际值后，在受限白名单内用 Function 求值）。
  *
- * 白名单策略：先把字符串字面量替换为安全占位（`"x"`），其余只允许
- * 数字/操作符/布尔/null/括号/逗号/引号/空白——任意标识符（如 `process`）会被拒绝。
+ * NEW-5/NEW-6 修复：
+ * - 字段替换做类型白名单（string/number/boolean/null），不用裸 JSON.stringify
+ * - 字段不存在 → 'null'（表达式自然求值为 false，R32）
+ * - 单字段字符串 ≤ 10000 字符；表达式 ≤ 2000 字符（R34）
+ * - new Function 仅在白名单 + 类型白名单 + 长度限制下使用（R33）
  */
 export function evaluateCondition(expr: string, state: Record<string, unknown>): boolean {
-  // ① 字段替换：state.xxx → JSON.stringify 值
+  // NEW-6：表达式长度限制
+  if (expr.length > EXPR_MAX) {
+    throw new ConditionEvalError(`条件表达式过长: ${expr.length} > ${EXPR_MAX}`)
+  }
+
+  // ① 字段替换：类型白名单 + 显式处理（NEW-5 R31/R32）
   const replaced = expr.replace(/state\.(\w+)/g, (_, field: string) => {
     const value = state[field]
-    return JSON.stringify(value)
+    if (value === undefined) return 'null'
+    if (value === null) return 'null'
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'null'
+    if (typeof value === 'boolean') return String(value)
+    if (typeof value === 'string') {
+      if (value.length > FIELD_STRING_MAX) {
+        throw new ConditionEvalError(`字段 ${field} 字符串过长（${value.length} > ${FIELD_STRING_MAX}）`)
+      }
+      return JSON.stringify(value)
+    }
+    throw new ConditionEvalError(
+      `条件表达式不支持字段 ${field} 的类型: ${typeof value}（只支持 string/number/boolean/null）`,
+    )
   })
 
-  // ② 白名单校验：字符串字面量先归一为 "0"（内容本身不参与校验）
-  const checkable = replaced.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '"0"')
+  // ② 白名单校验：字符串/true/false/null 归一为安全占位（NEW-5；内容本身不参与校验）
+  const checkable = replaced
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '"0"')
+    .replace(/\btrue\b/g, '1')
+    .replace(/\bfalse\b/g, '0')
+    .replace(/\bnull\b/g, '0')
   if (!/^[\s\d+\-*/<>=!&|(),.'"]*$/.test(checkable)) {
     throw new ConditionEvalError(`条件表达式包含非法字符: ${expr}`)
   }

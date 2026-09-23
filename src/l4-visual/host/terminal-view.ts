@@ -25,9 +25,9 @@ export function supportsColor(): boolean {
   return process.stdout.isTTY === true && !process.env.CI
 }
 
-/** 格式化事件行（含颜色；color=false 时纯文本）。 */
-export function formatEventLine(event: TrajectoryEvent, color: boolean): string {
-  const ts = formatTime(event.timestamp)
+/** 格式化事件行（含颜色；color=false 时纯文本）。L9：时间相对图开始。 */
+export function formatEventLine(event: TrajectoryEvent, color: boolean, startedAt: number = 0): string {
+  const ts = formatTime(event.timestamp, startedAt)
   const icon = iconFor(event)
   const message = messageFor(event)
   const colorCode = colorFor(event)
@@ -37,8 +37,9 @@ export function formatEventLine(event: TrajectoryEvent, color: boolean): string 
   return `  [${ts}] ${icon} ${message}`
 }
 
-function formatTime(timestamp: number): string {
-  const s = Math.floor((Date.now() - timestamp) / 1000)
+/** L9 修复：时间语义与 html-report 对齐——相对图开始（mm:ss）。 */
+function formatTime(timestamp: number, startedAt: number): string {
+  const s = Math.max(0, Math.floor((timestamp - startedAt) / 1000))
   const mm = String(Math.floor(s / 60)).padStart(2, '0')
   const ss = String(s % 60).padStart(2, '0')
   return `${mm}:${ss}`
@@ -118,31 +119,36 @@ export function formatStatusHeader(snap: ExecutionSnapshot, color: boolean): str
   return `${line} [${snap.status}]`
 }
 
-/** 终端视图：订阅总线并逐行打印（返回停止函数）。 */
+/** 终端视图：订阅总线并逐行打印（返回停止函数）。NEW-9：保存 unsubscribe 并在 stop 时调用。 */
 export function createTerminalView(
   bus: GraphEventBus,
   output: (line: string) => void = (l) => console.log(l),
 ): { start(): void; stop(): void } {
   const color = supportsColor()
   let stopped = false
+  let unsubscribe: (() => void) | null = null
 
   function handle(event: TrajectoryEvent): void {
     if (stopped) return
-    output(formatEventLine(event, color))
+    // L9：时间相对图开始（与 html-report 对齐）
+    const snap = bus.getSnapshot()
+    output(formatEventLine(event, color, snap.startedAt))
     // 节点结束时刷新状态头
     if (event.type === 'graph/node-end' || event.type === 'graph/loop-iteration') {
-      output(formatStatusHeader(bus.getSnapshot(), color))
+      output(formatStatusHeader(snap, color))
     }
   }
 
   return {
     start() {
-      bus.subscribe(handle)
+      unsubscribe = bus.subscribe(handle) // NEW-9：保存注销函数
       output(`${C.cyan}════ MVP-2 Graph Execution ${C.reset}`)
       output(formatStatusHeader(bus.getSnapshot(), color))
     },
     stop() {
       stopped = true
+      unsubscribe?.() // NEW-9：解除订阅
+      unsubscribe = null
       output(formatStatusHeader(bus.getSnapshot(), color))
       output(`${C.cyan}════ 执行结束 ${C.reset}`)
     },

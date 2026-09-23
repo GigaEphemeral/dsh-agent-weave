@@ -8,7 +8,7 @@
  */
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
-import { createStateGraph, END, type StateGraph } from './state-graph.js'
+import { createStateGraph, SKIP, type StateGraph } from './state-graph.js'
 import { computeGraphSchemaHash, GraphValidationError, parseGraphDefinition } from './graph-definition.js'
 import { evaluateCondition } from './condition-edge.js'
 import { validateGraph } from './static-validator.js'
@@ -71,10 +71,11 @@ export class GraphEngineService extends Service {
     for (const node of parsed.nodes) {
       if (node.nodeType === 'role') {
         // MVP-2 只做纯 handler 节点；子代理节点在 MVP-3
-        graph.addNode(node.id, async () => ({}) as Partial<T>)
+        // NEW-10：注册时传 role meta（供 node-start 事件 currentRole）
+        graph.addNode(node.id, async () => ({}) as Partial<T>, { role: node.roleRef ?? node.nodeType })
       } else if (node.nodeType === 'condition') {
         // 条件节点：由 edges 的 when 表达式驱动（声明式），此处注册空 handler
-        graph.addNode(node.id, async () => ({}) as Partial<T>)
+        graph.addNode(node.id, async () => ({}) as Partial<T>, { role: node.nodeType })
       } else if (node.nodeType === 'approval') {
         // S8：从 YAML 加载的审批门默认 required:false（CLI/测试场景无 approval 服务时跳过；
         // 需要强制的场景由显式 addApprovalGate 调用方控制 required:true）
@@ -105,15 +106,27 @@ export class GraphEngineService extends Service {
     // S7：同一 from 的所有 cond 边合成一个 ConditionHandler（按声明顺序求值）
     for (const [from, condEdges] of condEdgesByFrom) {
       const maxIter = Math.max(...condEdges.map((e) => e.maxIter ?? 1))
+      const ctx = this.ctx
       graph.addConditionalEdge(
         from,
         async (state) => {
           for (const edge of condEdges) {
-            if (evaluateCondition(edge.when, state as Record<string, unknown>)) {
-              return edge.to
+            try {
+              // NEW-3：单个条件求值失败不阻塞整条链（记日志 + 继续下一条）
+              if (evaluateCondition(edge.when, state as Record<string, unknown>)) {
+                return edge.to
+              }
+            } catch (error) {
+              ctx.logger.warn('graph', '条件求值失败，跳过', {
+                from,
+                to: edge.to,
+                when: edge.when,
+                error: error instanceof Error ? error.message : String(error),
+              })
             }
           }
-          return END // 都不满足 → 终止
+          // NEW-4：所有条件都不满足 → SKIP，让引擎尝试静态边（不再直接 END）
+          return SKIP
         },
         maxIter,
       )

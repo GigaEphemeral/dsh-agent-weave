@@ -43,8 +43,8 @@ describe('T7 条件表达式求值', () => {
     expect(() => evaluateCondition('process.exit(0)', {})).toThrow(ConditionEvalError)
   })
 
-  it('引用缺失字段抛 ConditionEvalError（undefined 非法）', () => {
-    expect(() => evaluateCondition('state.missing_field > 3', {})).toThrow(ConditionEvalError)
+  it('引用缺失字段 → null（自然 false，NEW-5 语义）', () => {
+    expect(evaluateCondition('state.missing_field > 3', {})).toBe(false)
   })
 
   it('shouldRetry / shouldEscalate 边界', () => {

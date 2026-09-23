@@ -68,15 +68,24 @@ export async function runGraphMock(ctx: Context, spec: GraphDefinitionSpec, bus:
     } else {
       const nodeId = node.id
       const role = node.roleRef ?? node.nodeType
-      graph.addNode(nodeId, async () => {
-        await new Promise((r) => setTimeout(r, MOCK_NODE_DELAY_MS))
-        // M14 修复：retry_count 返回增量 1（merge 是累加策略），messages 追加
-        return {
-          messages: [{ role: 'mock', node: nodeId, at: Date.now() }],
-          retry_count: 1,
-        }
-      })
-      void role
+      // NEW-8：mock handler 同步 S13 接口（reportTokenUsage/reportRetry）
+      graph.addNode(
+        nodeId,
+        async (state, nodeCtx) => {
+          await new Promise((r) => setTimeout(r, MOCK_NODE_DELAY_MS))
+          const inputTokens = Math.floor(Math.random() * 400) + 200
+          const outputTokens = Math.floor(Math.random() * 300) + 100
+          nodeCtx.reportTokenUsage?.({ input: inputTokens, output: outputTokens, cacheRead: 0 })
+          nodeCtx.reportRetry?.((state.retry_count as number | undefined) ?? 0)
+          // M14：retry_count 返回增量 1（merge 是累加策略），messages 追加
+          return {
+            messages: [{ role: 'mock', node: nodeId, at: Date.now() }],
+            retry_count: 1,
+            active_agent: role,
+          }
+        },
+        { role }, // NEW-10：节点 meta
+      )
     }
   }
 

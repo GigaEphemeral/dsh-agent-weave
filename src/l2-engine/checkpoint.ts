@@ -67,11 +67,22 @@ export class FsCheckpointStore implements CheckpointStore {
   }
 
   read(fullPath: string): CheckpointRecord | null {
+    // A5 (M12) 修复：区分 ENOENT（无 checkpoint）与解析错误（数据损坏需暴露）
+    let text: string
     try {
-      const text = readFileSync(fullPath, 'utf8')
+      text = readFileSync(fullPath, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null // 文件不存在 → 明确的"无 checkpoint"
+      }
+      throw error // 其他 IO 错误（权限/磁盘）→ 暴露
+    }
+    try {
       return JSON.parse(text) as CheckpointRecord
-    } catch {
-      return null
+    } catch (error) {
+      throw new Error(
+        `checkpoint 反序列化失败: ${fullPath}: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
   }
 
@@ -84,12 +95,10 @@ export class FsCheckpointStore implements CheckpointStore {
   }
 }
 
-/** 创建 checkpoint 回调（写入不抛错，吞掉记日志）。 */
+/** 创建 checkpoint 回调（写入不抛错，吞掉记日志）。NEW-7：graphVersion/hash 从 payload 读（单一来源 R36）。 */
 export function createCheckpointCallback<T>(
   store: CheckpointStore,
   graphId: string,
-  graphVersion: string,
-  graphSchemaHash: string,
   logger?: CheckpointLogger,
 ): CheckpointCallback<T> {
   return async (payload: CheckpointPayload<T>) => {
@@ -109,8 +118,9 @@ export function createCheckpointCallback<T>(
       const file = `${store.dir(graphId)}/${payload.iteration}-${payload.node}.json`
       const record: CheckpointRecord = {
         graphId,
-        graphVersion,
-        graphSchemaHash,
+        // NEW-7：从 payload 读（权威来源）
+        graphVersion: payload.graphVersion,
+        graphSchemaHash: payload.graphSchemaHash,
         node: payload.node,
         state: serialized,
         iteration: payload.iteration,

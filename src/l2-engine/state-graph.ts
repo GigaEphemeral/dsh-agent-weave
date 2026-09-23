@@ -27,13 +27,17 @@ import type {
   GraphExecutionResult,
   GraphNodeContext,
   NodeHandler,
+  NodeMeta,
   RunOptions,
   TrajectoryEvent,
 } from './types.js'
 import { mergeState } from './atomic-merge.js'
 import { createConcurrencyCounter } from './concurrency-counter.js'
+import { edgeKey, resolveNextNode } from './condition-edge.js'
 
 export const END = '__END__'
+/** NEW-4：显式跳过本条件边，让引擎尝试下一条或静态边。 */
+export const SKIP = '__SKIP__'
 
 /** 审批服务最小接口（dsh-user-approval 的 ApprovalService.request 形态，运行时存在性检查）。 */
 interface ApprovalServiceLike {
@@ -54,7 +58,8 @@ export interface ApprovalGateOptions {
 }
 
 export interface StateGraph<T> {
-  addNode(name: string, handler: NodeHandler<T>): this
+  /** NEW-10：addNode 支持 meta（role 数据来源，供 node-start 事件）。 */
+  addNode(name: string, handler: NodeHandler<T>, meta?: NodeMeta): this
   addEdge(from: string, to: string): this
   /** 声明式循环边：`from → to` 最多回退 maxIter 次，用尽后走审批/终止。 */
   addLoopEdge(from: string, to: string, maxIter: number): this
@@ -102,6 +107,7 @@ export function createStateGraph<T extends Record<string, unknown>>(
   artifactsRoot?: string,
 ): StateGraph<T> {
   const nodes = new Map<string, NodeHandler<T>>()
+  const nodeMetas = new Map<string, NodeMeta>() // NEW-10
   const edges: InternalEdge[] = []
   const conditionalEdges: InternalConditionalEdge[] = []
   const approvalGates = new Map<string, ApprovalGateOptions>()
@@ -110,10 +116,11 @@ export function createStateGraph<T extends Record<string, unknown>>(
   const concurrency = createConcurrencyCounter(ctx, maxConcurrentChildren)
 
   return {
-    addNode(name, handler) {
+    addNode(name, handler, meta) {
       if (name === END) throw new Error('__END__ 是保留哨兵')
       if (nodes.has(name)) throw new Error(`节点已存在: ${name}`)
       nodes.set(name, handler)
+      if (meta !== undefined) nodeMetas.set(name, meta) // NEW-10
       if (!entryPoint) entryPoint = name
       return this
     },
@@ -189,8 +196,10 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
       emit({ type: 'graph/start', graphId, timestamp: Date.now() })
 
-      // 循环回退计数（S4：支持从 checkpoint 恢复）
-      let loopUsed = new Map<string, number>()
+      // 循环回退计数（S4 落盘恢复；NEW-2：initialLoopUsage 接通恢复）
+      const loopUsed = options.initialLoopUsage
+        ? new Map(Object.entries(options.initialLoopUsage))
+        : new Map<string, number>()
 
       while (current !== END) {
         // RES.10 §一.3：计数在"进入节点前"
@@ -258,7 +267,14 @@ export function createStateGraph<T extends Record<string, unknown>>(
             },
           }
 
-          emit({ type: 'graph/node-start', graphId, node: current, timestamp: Date.now() })
+          // NEW-10：node-start 携带 role（currentRole 数据来源）
+          emit({
+            type: 'graph/node-start',
+            graphId,
+            node: current,
+            timestamp: Date.now(),
+            data: { role: nodeMetas.get(current)?.role ?? '' },
+          })
 
           const startTime = Date.now()
           const patch = await handler(state, nodeCtx, options.signal)
@@ -317,7 +333,7 @@ export function createStateGraph<T extends Record<string, unknown>>(
           })
           emit({ type: 'graph/checkpoint-written', graphId, node: current, timestamp: Date.now() })
 
-          // 解析下一节点：条件边优先（函数式），否则声明式 seq/loop
+          // 解析下一节点：条件边优先（函数式），否则声明式（S5：统一走 resolveNextNode）
           const conditional = conditionalEdges.filter((e) => e.from === current)
           let next: string | undefined
           for (const ce of conditional) {
@@ -327,6 +343,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
             }
             const result = await ce.condition(state as unknown as Record<string, unknown>, nodeCtx as never, options.signal)
             const resolved = Array.isArray(result) ? result[0] : result
+            // NEW-4：SKIP 显式跳过，让引擎尝试下一条条件边或静态边
+            if (resolved === SKIP) continue
             if (resolved !== undefined && resolved !== END) {
               ce.used++
               // L5：loop-iteration 事件携带 from/to
@@ -343,29 +361,19 @@ export function createStateGraph<T extends Record<string, unknown>>(
           }
 
           if (next === undefined) {
-            // 声明式边：优先 loop（回退），否则 seq
-            const outgoing = edges.filter((e) => e.from === current)
-            const loop = outgoing.find((e) => e.type === 'loop')
-            if (loop !== undefined) {
-              const used = loopUsed.get(`${loop.from}->${loop.to}`) ?? 0
-              if (used < (loop.maxIter ?? 1)) {
-                loopUsed.set(`${loop.from}->${loop.to}`, used + 1)
-                emit({
-                  type: 'graph/loop-iteration',
-                  graphId,
-                  node: current,
-                  timestamp: Date.now(),
-                  data: { iteration: used + 1, maxIter: loop.maxIter, from: loop.from, to: loop.to },
-                })
-                next = loop.to
-              } else {
-                // loop 用尽 → 走审批路径（cond 边 to 含 approval 或直接终止）
-                const approval = edges.find((e) => e.from === current && e.to.includes('approval'))
-                next = approval?.to ?? END
-              }
-            } else {
-              const seq = outgoing.find((e) => e.type === 'seq')
-              next = seq?.to ?? END
+            // S5：统一调用 resolveNextNode（声明式 seq/loop 决策唯一实现）
+            const usage = Object.fromEntries(loopUsed)
+            next = resolveNextNode(current, edges as never, state as unknown as Record<string, unknown>, usage)
+            const key = edgeKey(current, next)
+            if (next !== END && edges.some((e) => e.from === current && e.type === 'loop' && e.to === next)) {
+              loopUsed.set(key, (loopUsed.get(key) ?? 0) + 1)
+              emit({
+                type: 'graph/loop-iteration',
+                graphId,
+                node: current,
+                timestamp: Date.now(),
+                data: { iteration: loopUsed.get(key), from: current, to: next },
+              })
             }
           }
 

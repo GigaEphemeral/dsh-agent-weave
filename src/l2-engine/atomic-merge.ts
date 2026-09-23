@@ -32,10 +32,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** 递归深合并两个纯对象（M1 修复：artifacts 嵌套对象也合并）。 */
+/** 递归深合并两个纯对象（M1 修复：artifacts 嵌套对象也合并；NEW-1：防深层原型污染）。 */
 function deepMergeObjects(prev: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...prev }
+  // NEW-1：用 Object.create(null) 而非 spread —— 从源头断掉原型链（R23）
+  const out: Record<string, unknown> = Object.assign(Object.create(null), prev)
   for (const [key, patchValue] of Object.entries(patch)) {
+    // NEW-1：深层同样检查危险键（R22）
+    if (DANGEROUS_KEYS.has(key)) continue
     const prevValue = out[key]
     if (isPlainObject(prevValue) && isPlainObject(patchValue)) {
       out[key] = deepMergeObjects(prevValue, patchValue)

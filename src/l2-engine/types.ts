@@ -109,6 +109,14 @@ export interface RunOptions<T> {
   signal?: AbortSignal
   /** 初始迭代次数（默认 0，恢复场景用）。 */
   initialIteration?: number
+  /** 恢复场景：从最近 checkpoint 读回的 loopUsage（NEW-2 修复：loopUsed 恢复接通）。 */
+  initialLoopUsage?: Record<string, number>
+}
+
+/** 节点元数据（NEW-10：currentRole 数据来源）。 */
+export interface NodeMeta {
+  /** 节点关联角色（role 节点 = roleRef；condition/approval = nodeType）。 */
+  role?: string
 }
 
 /** checkpoint 载荷（节点补丁合并后落盘；含 graphVersion 双字段，RES.8 §三.1）。 */

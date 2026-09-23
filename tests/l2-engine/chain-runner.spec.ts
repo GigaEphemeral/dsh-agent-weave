@@ -235,7 +235,7 @@ describe('可观测性与中止（chain.log + STOP）', () => {
       expect(calls).toHaveLength(0)
       const log = readFileSync(join(root, 'chain.log'), 'utf8')
       expect(log).toContain('检测到 STOP 标志')
-      expect(log).toContain('链已中止')
+      expect(log).toContain('链已终止') // A4 修复：结束日志措辞由"中止"改"终止"
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

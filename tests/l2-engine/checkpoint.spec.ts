@@ -1,4 +1,4 @@
-/**
+﻿/**
  * checkpoint.ts 单测（MVP-2 T5 Exit Gate：7 用例全绿）。
  *
  * 覆盖：写入 7 字段 / 序列化失败记日志不抛 / 写入失败记日志不抛 /
@@ -68,7 +68,7 @@ describe('T5 checkpoint 契约', () => {
   it('序列化失败（循环引用）记日志不抛', async () => {
     const store = new MemoryStore()
     const logger = { error: vi.fn() }
-    const cb = createCheckpointCallback(store, 'graph-1', '0.1.0', 'hash', logger)
+    const cb = createCheckpointCallback(store, 'graph-1', logger)
     const circular: Record<string, unknown> = {}
     circular.self = circular
     await expect(
@@ -90,7 +90,7 @@ describe('T5 checkpoint 契约', () => {
     const store = new MemoryStore()
     store.failWrites = true
     const logger = { error: vi.fn() }
-    const cb = createCheckpointCallback(store, 'graph-1', '0.1.0', 'hash', logger)
+    const cb = createCheckpointCallback(store, 'graph-1', logger)
     await expect(
       cb({
         graphId: 'graph-1',
