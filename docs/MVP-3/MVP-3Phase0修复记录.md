@@ -87,3 +87,16 @@
 | P3.B.3 | deadlock-guard（重试≤2 / 同链路≥3 终止 / 工作流超时降级审批） | ✅ |
 
 **GB 门禁**：消息中转封装可用；等待唤醒 Promise 实现；死锁检测三规则生效（单测）。
+
+---
+
+## 六、Phase C 完成情况（追加 2026-09-23）
+
+| 任务 | 交付物 | 结果 |
+|---|---|---|
+| P3.C.1 | task-tree（根/子任务/状态/子树/序列化恢复） | ✅ phase-c.spec |
+| P3.C.2 | handoff（summary/artifacts/openIssues/provenance + 校验 + 文本化） | ✅ |
+| P3.C.3 | run-ledger（不可变事件流 + 按图过滤 + JSONL 恢复） | ✅ |
+| P3.C.4 | token-collector（节点/角色分账 + session usage 解析） | ✅ |
+
+**GC 门禁**：任务树/交接/RunLedger/分账模块就绪（单测）；暂停状态落盘（Phase0 A4 已含 pause-state.json）。
