@@ -19,7 +19,7 @@ export interface RestartManager {
 }
 
 /** 内存降级实现（无 ctx.jobs/goals 时）。 */
-export function createRestartManager(ctx: {
+export function createRestartManager(_ctx: {
   get(name: string): unknown
 }): RestartManager {
   const jobs = new Map<string, 'running' | 'done' | 'failed'>()
@@ -27,6 +27,7 @@ export function createRestartManager(ctx: {
 
   return {
     async startJob(name, fn) {
+      void name
       const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
       jobs.set(id, 'running')
       fn().then(

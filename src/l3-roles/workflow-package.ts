@@ -5,7 +5,7 @@
  * - 流程包：YAML 图定义（复用 graph-definition）+ graphSchemaHash 校验
  */
 import { readFileSync } from 'node:fs'
-import { parseRoleYaml, type RoleDefinition } from './role-schema.js'
+import { parseRoleYaml, type RoleDefinition } from '../shared/types.js'
 import { computeGraphSchemaHash, parseGraphDefinitionYaml } from '../l2-engine/graph-definition.js'
 import { validateGraph } from '../l2-engine/static-validator.js'
 import type { GraphDefinitionSpec } from '../l2-engine/types.js'
