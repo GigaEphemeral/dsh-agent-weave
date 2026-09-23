@@ -62,3 +62,16 @@
 
 ---
 **关联**：`docs/MVP-3/MVP-3task.md`、`docs/MVP-3/规范约束.md`、`tests/l2-engine/mvp3-phase0.spec.ts`
+
+---
+
+## 四、Phase A 完成情况（追加 2026-09-23）
+
+| 任务 | 交付物 | 结果 |
+|---|---|---|
+| P3.A.1 | state-graph addSubagent（真实 ctx.subagents.start + 产物落盘 + upstream 摘要注入） | ✅ subagent-node.spec 4 用例 |
+| P3.A.2 | lifecycle-manager（resident/on-demand/hybrid + prewarm + 活跃窗口） | ✅ lifecycle-manager.spec 5 用例 |
+| P3.A.3 | run signal 贯通子代理 start（中断实时传播） | ✅ subagent-node.spec |
+
+**GA 门禁**：addSubagent 已可被图节点执行真实 start；生命周期三模式决策可用；中断 signal 贯通。
+（真实 LLM 端到端验证需隔离环境 + ollama-local，待环境就绪后补。）
