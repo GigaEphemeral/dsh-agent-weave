@@ -220,6 +220,54 @@ export function registerVisualCommands(ctx: Context): () => void {
     ),
   )
 
+  disposers.push(
+    ctx.tools.register(
+      defineTool({
+        name: 'weave_graph_tail',
+        description:
+          '查看最近一次图执行的进度 trace 日志（productions/traces/graph-*.jsonl 事件流）。' +
+          '返回最近 N 条事件；配合 Get-Content -Wait 可实时观测任务进度。',
+        parameters: {
+          lines: { type: 'integer', description: '返回最近多少条事件（默认 20）' },
+        },
+        output: {
+          schema: { type: 'string' },
+          render(_args, value) {
+            return [{ type: 'text', text: value }]
+          },
+        },
+        async execute(args) {
+          const { readdirSync, readFileSync } = await import('node:fs')
+          const { join } = await import('node:path')
+          const tracesDir = join(artifactsRoot(), 'traces')
+          let files: string[]
+          try {
+            files = readdirSync(tracesDir).filter((f) => f.endsWith('.jsonl'))
+          } catch {
+            return '（尚无 trace 日志，先运行 weave_graph_watch / weave_graph_report）'
+          }
+          if (files.length === 0) return '（traces 目录为空，先运行 weave_graph_watch / weave_graph_report）'
+          // 按文件大小取最新（jsonl 追加，最大的通常是最近的）
+          files.sort((a, b) => {
+            const fa = join(tracesDir, a)
+            const fb = join(tracesDir, b)
+            try {
+              return readFileSync(fb, 'utf8').length - readFileSync(fa, 'utf8').length
+            } catch {
+              return 0
+            }
+          })
+          const latest = files[0]
+          if (!latest) return '（无 trace 文件）'
+          const allLines = readFileSync(join(tracesDir, latest), 'utf8').split('\n').filter(Boolean)
+          const n = Math.min(Math.max(1, args.lines ?? 20), allLines.length)
+          const tail = allLines.slice(-n)
+          return `最新 trace: ${latest}（共 ${allLines.length} 条事件）\n\n${tail.join('\n')}\n\n（实时观测：Get-Content -Wait "${join(tracesDir, latest)}"）`
+        },
+      }),
+    ),
+  )
+
   return () => {
     for (const d of disposers) d()
   }

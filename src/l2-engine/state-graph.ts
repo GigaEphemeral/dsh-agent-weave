@@ -19,7 +19,7 @@
  * - S11：无出边发 warning 级 graph/error 事件（不改变成功语义）
  * - S13：node-end 事件携带 inputTokens/outputTokens/cacheReadTokens/tokenUsed/retryCount
  */
-import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs'
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
@@ -160,16 +160,16 @@ export function createStateGraph<T extends Record<string, unknown>>(
       let current: string = entryPoint
       let iteration = options.initialIteration ?? 0
 
-      // S9：trace 流（可选，artifactsRoot 传入时落盘；容器对象避免闭包赋值推断 never）
-      const trace: { stream: WriteStream | null } = { stream: null }
-      const ensureTraceStream = () => {
-        if (trace.stream || !artifactsRoot) return
+      // S9：trace 事件落盘（可选，artifactsRoot 传入时同步追加；可靠性优先）
+      const trace: { file: string | null } = { file: null }
+      const ensureTraceFile = () => {
+        if (trace.file || !artifactsRoot) return
         try {
           const traceDir = join(artifactsRoot, 'traces')
           mkdirSync(traceDir, { recursive: true })
-          trace.stream = createWriteStream(join(traceDir, `${graphId}.jsonl`), { flags: 'a' })
+          trace.file = join(traceDir, `${graphId}.jsonl`)
         } catch {
-          trace.stream = null // 落盘失败不阻塞执行
+          trace.file = null // 落盘失败不阻塞执行
         }
       }
 
@@ -177,9 +177,13 @@ export function createStateGraph<T extends Record<string, unknown>>(
         trajectory.push(event)
         // graph/* 事件非 Cordis 内置 Events 类型，用宽松签名发射
         ;(ctx.emit as (name: string, payload: unknown) => void)(event.type, event)
-        ensureTraceStream()
-        if (trace.stream) {
-          trace.stream.write(`${JSON.stringify(event)}\n`)
+        ensureTraceFile()
+        if (trace.file) {
+          try {
+            appendFileSync(trace.file, `${JSON.stringify(event)}\n`, 'utf8')
+          } catch {
+            // 追加失败静默（不阻塞执行）
+          }
         }
       }
 
@@ -401,7 +405,6 @@ export function createStateGraph<T extends Record<string, unknown>>(
       }
 
       emit({ type: 'graph/end', graphId, timestamp: Date.now() })
-      if (trace.stream !== null) trace.stream.end()
       return { graphId, success: true, finalState: state, trajectory, iterations: iteration }
     },
   }

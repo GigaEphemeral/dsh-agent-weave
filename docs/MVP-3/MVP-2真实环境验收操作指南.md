@@ -87,27 +87,43 @@
 - **事件时间线**：完整事件流
 - **Token 分账**：按节点输入/输出/缓存/合计
 
-## 四、通道 B：tail 日志实时观测
+## 四、通道 B：tail 日志实时观测（任务进度）
+
+**引擎每次图执行都会把事件流落盘到 `productions/traces/graph-<id>.jsonl`**（S9 修复），
+这是**任务进度最直接的观测点**——每个节点的开始/完成/回退/checkpoint 都是独立 JSON 行。
+
+### 方式 1：tail -f 实时跟随（推荐）
 
 在**另一个 PowerShell 窗口**运行（零 token，纯读日志）：
 
 ```powershell
-$env:DSH_HOME = 'D:\dsharness\agentDev\softwareEngnieering\3pluginCode\test-env\dsh-home'
-$sessDir = "$env:DSH_HOME\sessions\--D-dsharness-agentDev-softwareEngnieering-3pluginCode--"
-# 列出最新会话目录，tail 其 session.v3.jsonl.zstd 中 graph/* 事件
-# （zstd 压缩，用项目 test-env/scan-session-events.mjs 或 watch-chain.ps1 思路）
+cd D:\dsharness\agentDev\softwareEngnieering\3pluginCode
+# 实时跟随最新 trace 文件（图执行时逐行追加）
+Get-ChildItem productions\traces\graph-*.jsonl | Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1 | ForEach-Object { Get-Content $_.FullName -Encoding UTF8 -Wait -Tail 20 }
 ```
 
-> 简洁做法：直接看 web 启动窗口（后台 job pwsh-1）的实时日志——每次图执行，
-> `graph/node-start` / `graph/node-end` / `graph/checkpoint-written` 事件会打印。
-
-**tail 方式二（推荐，最简）**：用 `watch-chain.ps1` 同款思路监控会话目录：
-
-```powershell
-# 新建监控窗口：实时显示最新会话目录的 zstd 解压事件流
-Get-ChildItem "$env:DSH_HOME\sessions\--D-dsharness-agentDev-softwareEngnieering-3pluginCode--" -Directory |
-  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+**预期看到**（每个节点一行）：
 ```
+{"type":"graph/node-start","graphId":"graph-xxx","node":"start",...}
+{"type":"graph/node-end","graphId":"graph-xxx","node":"start","durationMs":300,"data":{"tokenUsed":508},...}
+{"type":"graph/checkpoint-written","graphId":"graph-xxx","node":"start",...}
+{"type":"graph/loop-iteration","graphId":"graph-xxx","node":"check","data":{"iteration":1,"from":"check","to":"done"},...}
+```
+
+### 方式 2：weave_graph_tail 工具（web chat / headless）
+
+```
+请调用 weave_graph_tail 工具，参数 lines 为 20，原样输出结果
+```
+返回最近 N 条事件 + 文件路径。
+
+### 方式 3：看 web 启动窗口日志
+
+web 启动窗口（后台 job）的实时日志会打印每次图执行的引擎事件。
+
+> **进度观测要点**：`node-start` 出现 = 该节点开始工作；`node-end` 出现 = 完成（含耗时/Token）；
+> `loop-iteration` = 回退发生；`checkpoint-written` = 状态已落盘（可恢复）。
 
 ## 五、通道 C：终端直跑（快速验证）
 
