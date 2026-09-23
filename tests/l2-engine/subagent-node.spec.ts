@@ -98,4 +98,19 @@ describe('P3.A.1 addSubagent', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('P3.A.3：run 的 signal 贯通到子代理 start', async () => {
+    const { ctx, calls } = mockCtx()
+    const g = createStateGraph<Record<string, unknown>>(ctx)
+    g.addSubagent('dev', { provider: 'R6-developer' })
+    const ctrl = new AbortController()
+    const r = await g.run({ messages: [] } as Record<string, unknown>, {
+      checkpoint: async () => {},
+      ...RO,
+      agent: fakeAgent as never,
+      signal: ctrl.signal,
+    })
+    expect(r.success).toBe(true)
+    expect(calls[0]?.signal).toBe(ctrl.signal) // 同一 signal 对象
+  })
 })
