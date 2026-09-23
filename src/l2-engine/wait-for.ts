@@ -4,9 +4,9 @@
  * A 挂起等待 B 的消息；B 完成后 wakeUp 唤醒 A。
  * 不用轮询——基于 Promise resolve 的等待队列 + 可选超时。
  */
-export interface WaitFor<T = MessageDelivery> {
+export interface WaitFor<T extends MessageDelivery = MessageDelivery> {
   /** 挂起等待匹配消息，返回 Promise；超时/中止则 reject。 */
-  wait(predicate: (m: MessageDelivery) => boolean, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<MessageDelivery>
+  wait(predicate: (m: T) => boolean, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T>
   /** 唤醒所有匹配的等待者（返回唤醒数）。 */
   wakeUp(msg: MessageDelivery): number
   /** 当前等待者数量。 */
@@ -31,7 +31,7 @@ interface PendingWait<T> {
 }
 
 /** 创建等待唤醒器。 */
-export function createWaitFor<T = MessageDelivery>(): WaitFor<T> {
+export function createWaitFor<T extends MessageDelivery = MessageDelivery>(): WaitFor<T> {
   const pending: Array<PendingWait<T>> = []
 
   return {
