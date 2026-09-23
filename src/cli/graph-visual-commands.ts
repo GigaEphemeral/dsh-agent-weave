@@ -26,6 +26,9 @@ import { evaluateCondition } from '../l2-engine/condition-edge.js'
 import { createEventBus } from '../l4-visual/host/event-bus.js'
 import { setGlobalBus } from '../l4-visual/host/shared-bus.js'
 import { resolveArtifactsRoot } from '../l4-visual/host/artifacts-root.js'
+import { registerGraph } from '../l4-visual/host/spec-registry.js'
+import { getGlobalTokens } from '../l4-visual/host/visual-runtime.js'
+import { getGlobalLedger } from './graph-run-commands.js'
 import { createTerminalView, formatStatusHeader } from '../l4-visual/host/terminal-view.js'
 import { renderHtmlReport } from '../l4-visual/host/html-report.js'
 import { createLoopDetector } from '../l4-visual/host/loop-detector.js'
@@ -54,7 +57,14 @@ export async function runGraphMock(ctx: Context, spec: GraphDefinitionSpec, bus:
     spec.maxIterations ?? 25,
     8,
     root, // P4.0.3：统一 artifactsRoot（不再用 cwd 硬编码）
+    (evt) => bus.handle(evt), // P4.0.1：引擎事件 → 总线（替代手动 checkpoint 桥接）
+    getGlobalLedger(),        // P1-1：RunLedger
+    getGlobalTokens(),        // P1-2：Token 分账（mock 数值也入账，看板可显示）
   )
+  // P4.A.4：注册 spec/roleMap 供 REST 读取
+  const roleMap: Record<string, string> = {}
+  for (const n of spec.nodes) roleMap[n.id] = n.roleRef ?? n.nodeType
+  registerGraph(bus.getSnapshot().graphId || `graph-${Date.now()}`, { spec, roleMap, artifactsRoot: root })
 
   // 注册节点：role/condition 用 mock handler；approval 用审批门
   for (const node of spec.nodes) {
@@ -104,24 +114,8 @@ export async function runGraphMock(ctx: Context, spec: GraphDefinitionSpec, bus:
     }
   }
 
-  // 事件桥接：引擎 emit 的 graph/* 事件 → 总线（node-end 由引擎 S13 携带数据）
-  const checkpoint = async (payload: {
-    graphId: string
-    graphVersion: string
-    graphSchemaHash: string
-    node: string
-    state: Record<string, unknown>
-    iteration: number
-    timestamp: number
-  }) => {
-    bus.handle({
-      type: 'graph/checkpoint-written',
-      graphId: payload.graphId,
-      node: payload.node,
-      timestamp: payload.timestamp,
-      data: { iteration: payload.iteration, graphVersion: payload.graphVersion },
-    })
-  }
+  // checkpoint 回调：引擎 emit 已经 eventSink 桥接 checkpoint-written 到 bus，此处只做占位
+  const checkpoint = async () => {}
 
   const result = await graph.run(
     { messages: [], retry_count: 0, max_iterations: spec.maxIterations ?? 25 } as Record<string, unknown>,

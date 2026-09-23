@@ -1,5 +1,5 @@
 /**
- * 消息总线（MVP-3 P3.B.1）。
+ * 消息总线（MVP-3 P3.B.1 + MVP-4 P4.B.11 只读桥接）。
  *
  * 封装 ctx.subagents.sendMessage（RES.3 确认签名），提供：
  * - 消息类型：handoff / query / feedback / escalation
@@ -10,6 +10,7 @@
  *   Message { id, correlation_id, from, to, type, payload:{artifact_ref?,summary,full_content?},
  *             deadline, priority }
  */
+import type { RunLedger } from '../l5-observability/run-ledger.js'
 export type MessageType = 'handoff' | 'query' | 'feedback' | 'escalation'
 export type MessagePriority = 'high' | 'normal' | 'low'
 
@@ -35,6 +36,10 @@ export interface MessageBusOptions {
   ttlMs?: number
   /** sendMessage 底层调用（注入以便测试/替换）。 */
   sendImpl?: (to: string, content: Message) => Promise<string>
+  /** MVP-4 P4.B.11：消息发送后追加 ledger（只读桥接，零 token）。 */
+  ledger?: RunLedger
+  /** 当前 graphId（供 ledger 记录）。 */
+  graphId?: string
 }
 
 export interface MessageBus {
@@ -69,7 +74,28 @@ export function createMessageBus(options: MessageBusOptions = {}): MessageBus {
     async send(msg) {
       if (!sendImpl) throw new Error('MessageBus 未配置 sendImpl（真实环境注入 ctx.subagents.sendMessage）')
       if (this.isExpired(msg)) throw new Error(`消息已过期: ${msg.id}（${msg.type} ${msg.from}→${msg.to}）`)
-      return sendImpl(msg.to, msg)
+      const result = await sendImpl(msg.to, msg)
+
+      // MVP-4 P4.B.11：只读桥接——发送后追加 ledger（不改变 sendMessage 行为，零 token 新增）
+      options.ledger?.append({
+        type: 'agent-message',
+        graphId: options.graphId ?? '',
+        node: msg.from,
+        timestamp: Date.now(),
+        data: {
+          id: msg.id,
+          from: msg.from,
+          to: msg.to,
+          type: msg.type,
+          correlation_id: msg.correlation_id,
+          priority: msg.priority,
+          deadline: msg.deadline,
+          // 只存摘要，不存 full_content（避免 ledger 膨胀）
+          summary: msg.payload.summary,
+          ...(msg.payload.artifact_ref !== undefined ? { artifact_ref: msg.payload.artifact_ref } : {}),
+        },
+      })
+      return result
     },
     isExpired(msg, nowMs = Date.now()) {
       return nowMs > msg.deadline

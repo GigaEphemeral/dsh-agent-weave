@@ -15,8 +15,18 @@ import { createStateGraph, SKIP } from '../l2-engine/state-graph.js'
 import { evaluateCondition } from '../l2-engine/condition-edge.js'
 import { setGlobalBus } from '../l4-visual/host/shared-bus.js'
 import { resolveArtifactsRoot } from '../l4-visual/host/artifacts-root.js'
+import { registerGraph } from '../l4-visual/host/spec-registry.js'
+import { getGlobalTokens } from '../l4-visual/host/visual-runtime.js'
+import { createRunLedger, type RunLedger } from '../l5-observability/run-ledger.js'
 import { formatStatusHeader } from '../l4-visual/host/terminal-view.js'
 import type { GraphDefinitionSpec } from '../l2-engine/types.js'
+
+/** 全局 RunLedger（消息流桥接 + 审计；惰性创建）。 */
+let globalLedger: RunLedger | null = null
+export function getGlobalLedger(): RunLedger {
+  if (!globalLedger) globalLedger = createRunLedger()
+  return globalLedger
+}
 
 /** 运行真实图（role 节点接真实 subagent）。返回结构化结果。 */
 export async function runGraphRealTool(
@@ -37,7 +47,19 @@ export async function runGraphRealTool(
   const graphId = `graph-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const bus = setGlobalBus(graphId)
   bus.handle({ type: 'graph/start', graphId, timestamp: Date.now() })
-  const graph = createStateGraph<Record<string, unknown>>(ctx, spec.maxIterations ?? 25, 4, root)
+  const graph = createStateGraph<Record<string, unknown>>(
+    ctx,
+    spec.maxIterations ?? 25,
+    4,
+    root,
+    (evt) => bus.handle(evt), // P4.0.1：引擎事件 → 全局 bus
+    getGlobalLedger(),        // P1-1：RunLedger
+    getGlobalTokens(),        // P1-2：Token 分账（真实数值）
+  )
+  // P4.A.4：注册 spec/roleMap 供 REST 读取
+  const roleMap: Record<string, string> = {}
+  for (const n of spec.nodes) roleMap[n.id] = n.roleRef ?? n.nodeType
+  registerGraph(graphId, { spec, roleMap, artifactsRoot: root })
 
   // 节点：role → addSubagent；condition/approval → pass-through/门
   for (const node of spec.nodes) {
@@ -94,16 +116,8 @@ export async function runGraphRealTool(
     )
   }
 
-  // checkpoint 桥接事件到 bus
-  const checkpoint = async (payload: {
-    graphId: string; graphVersion: string; graphSchemaHash: string
-    node: string; state: Record<string, unknown>; iteration: number; timestamp: number
-  }) => {
-    bus.handle({
-      type: 'graph/checkpoint-written', graphId: payload.graphId, node: payload.node,
-      timestamp: payload.timestamp, data: { iteration: payload.iteration },
-    })
-  }
+  // checkpoint 回调：引擎 emit 已经 eventSink 桥接 checkpoint-written 到 bus，此处占位
+  const checkpoint = async () => {}
 
   const result = await graph.run(
     // P4.0.8：initial_state 支持（默认字段 + 用户覆盖）

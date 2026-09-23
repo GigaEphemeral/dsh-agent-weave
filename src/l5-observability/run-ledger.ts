@@ -7,6 +7,9 @@
 export type LedgerEventType =
   | 'graph/start' | 'graph/node-start' | 'graph/node-end' | 'graph/node-error'
   | 'graph/end' | 'checkpoint-written' | 'approval' | 'token-accounted'
+  | 'agent-message'   // MVP-4 P4.B.11 新增（消息流桥接，零 token）
+  | 'observer-signal' // MVP-4 P4.B.7 新增（观察者信号）
+  | 'approval-request' | 'approval-decided'  // MVP-4 P4.B.3 新增（审批闭环）
 
 export interface LedgerEvent {
   seq: number

@@ -7,6 +7,7 @@ import { registerGraphCommands } from './cli/graph-commands.js'
 import { registerVisualCommands } from './cli/graph-visual-commands.js'
 import { registerGraphRunCommand } from './cli/graph-run-commands.js'
 import { GraphEngineService } from './l2-engine/graph-service.js'
+import { registerVisualRuntime } from './l4-visual/host/visual-runtime.js'
 import { logger } from './shared/logger.js'
 
 /**
@@ -94,8 +95,12 @@ export function apply(ctx: Context, config: Config = {}): void {
     logTrajectory: true,
     maxConcurrentChildren: 8,
   })
+  // MVP-4 Phase B：可视化 REST/SSE 运行时（webServer 鸭子类型，headless 静默跳过）
+  const disposeVisual = registerVisualRuntime(ctx)
+  ctx.effect(() => disposeVisual)
   logger.info('weave', 'MVP-2 图引擎与命令就绪', {
     graph_service: true,
+    visual_runtime: true,
     commands: ['weave_graph_validate', 'weave_graph_show', 'weave_graph_help', 'weave_graph_watch', 'weave_graph_report', 'weave_graph_status', 'weave_graph_tail', 'weave_run_graph'],
   })
 }
