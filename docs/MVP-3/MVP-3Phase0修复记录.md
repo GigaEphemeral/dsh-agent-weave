@@ -75,3 +75,15 @@
 
 **GA 门禁**：addSubagent 已可被图节点执行真实 start；生命周期三模式决策可用；中断 signal 贯通。
 （真实 LLM 端到端验证需隔离环境 + ollama-local，待环境就绪后补。）
+
+---
+
+## 五、Phase B 完成情况（追加 2026-09-23）
+
+| 任务 | 交付物 | 结果 |
+|---|---|---|
+| P3.B.1 | message-bus（sendMessage 封装 + correlation_id/deadline/priority + 真实 sendImpl） | ✅ message-bus.spec |
+| P3.B.2 | wait-for（waitFor/wakeUp Promise 唤醒，不用轮询 + 超时/中止） | ✅ |
+| P3.B.3 | deadlock-guard（重试≤2 / 同链路≥3 终止 / 工作流超时降级审批） | ✅ |
+
+**GB 门禁**：消息中转封装可用；等待唤醒 Promise 实现；死锁检测三规则生效（单测）。
