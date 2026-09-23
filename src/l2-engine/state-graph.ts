@@ -38,13 +38,6 @@ import type { RunLedger, LedgerEventType } from '../l5-observability/run-ledger.
 import type { TokenCollector } from '../l5-observability/token-collector.js'
 import { logger } from '../shared/logger.js'
 
-/** 子代理 run 对象最小形态（问题 2 定位日志用；与 dsh-subagent SubagentRun 对齐）。 */
-interface SubagentRunLike {
-  id?: string
-  localAgent?: unknown
-  result: Promise<{ output: Array<{ type: string; text?: string }>; stopReason: string }>
-}
-
 /** 已注册 provider 名列表（安全读取，失败返回空——问题 2 定位日志用）。 */
 function safeProviderList(ctx: Context): string[] {
   try {
@@ -52,6 +45,62 @@ function safeProviderList(ctx: Context): string[] {
   } catch {
     return []
   }
+}
+
+/** 子代理端信息最小形态（subagent/end 事件载荷）。 */
+interface SubagentEndLike {
+  id: string
+  provider: string
+  stopReason?: string
+  lastAssistantMessage?: Array<{ type: string; text?: string }>
+}
+
+/**
+ * 等待一个 durable child 的 subagent/end 事件（问题三：continuable 无 result，
+ * 结果经生命周期事件异步返回）。订阅发生在调用时；超时/中止兜底返回空 output。
+ * 默认 5 分钟（LLM 子代理执行量级），超时记日志并返回空（不挂死图）。
+ */
+function waitForSubagentEnd(
+  ctx: Context,
+  childId: string,
+  signal?: AbortSignal,
+  timeoutMs = 300_000,
+): Promise<{ output: Array<{ type: string; text?: string }>; stopReason: string }> {
+  return new Promise((resolve) => {
+    let done = false
+    let timer: NodeJS.Timeout | null = null
+    const finish = (info?: SubagentEndLike): void => {
+      if (done) return
+      done = true
+      if (timer) clearTimeout(timer)
+      ;(ctx as unknown as { off(name: string, cb: (info: SubagentEndLike) => void): void }).off('subagent/end', onEnd)
+      resolve({
+        output: info?.lastAssistantMessage ?? [],
+        stopReason: info?.stopReason ?? 'completed',
+      })
+    }
+    const onEnd = (info: SubagentEndLike): void => {
+      if (info.id === childId) finish(info)
+    }
+    ;(ctx as unknown as { on(name: string, cb: (info: SubagentEndLike) => void): void }).on('subagent/end', onEnd)
+    timer = setTimeout(() => {
+      logger.warn('weave-addsubagent', '等待 subagent/end 超时，返回空 output', {
+        childId,
+        timeoutMs,
+      })
+      finish()
+    }, timeoutMs)
+    signal?.addEventListener('abort', () => finish(), { once: true })
+  })
+}
+
+/** 循环回退反馈（问题三预留：基于当前状态向原子代理说明为何打回）。 */
+function buildFeedbackFromState(state: Record<string, unknown>, node: string): string {
+  const messages = (state.messages as Array<{ node?: string; stopReason?: string }> | undefined) ?? []
+  const last = messages[messages.length - 1]
+  return `[工作流反馈] 节点 ${node} 需要你基于上下文继续处理。\n` +
+    `上游状态：messages=${messages.length} 条。\n` +
+    `请根据已有工作继续，不要从头开始。${last?.stopReason ? `（上次 stopReason: ${last.stopReason}）` : ''}`
 }
 
 /** 轨迹事件 → ledger 事件类型映射（P1-1）。 */
@@ -217,10 +266,13 @@ export function createStateGraph<T extends Record<string, unknown>>(
       return this
     },
 
-    // P3.A.1：真实子代理节点（role 节点接 ctx.subagents.start）
+    // P3.A.1 + 问题三最小版：真实子代理节点（role 节点用 startContinuable 建 durable child，
+    // 子代理 session 持久化，后续可被 sendMessage 互动/循环回退复用）
     addSubagent(name, options) {
       if (name === END || name === SKIP) throw new Error(`${name} 是保留哨兵`)
       if (nodes.has(name)) throw new Error(`节点已存在: ${name}`)
+      // 节点级持久化：node → durable child session id（同一节点复用同一子代理）
+      const childIdByNode = new Map<string, string>()
       nodes.set(name, async (state, nodeCtx, signal) => {
         const agent = nodeCtx.agent
         if (!agent) throw new Error(`子代理节点 "${name}" 需要 RunOptions.agent（真实 Agent 作 parent）`)
@@ -247,41 +299,76 @@ export function createStateGraph<T extends Record<string, unknown>>(
           signalAborted: signal?.aborted ?? false,
           registeredProviders: safeProviderList(nodeCtx.ctx),
           promptLen: prompt.length,
+          existingChildId: childIdByNode.get(name) ?? '',
         })
-        let run: SubagentRunLike
-        try {
-          run = await nodeCtx.ctx.subagents.start(options.provider, {
-            prompt: [{ type: 'text', text: prompt }],
-            parent: agent as never,
-            // P4.0.4：signal 契约必填——贯通外部 signal；无外部时新建真实 controller signal
-            //（绝不伪造共享/永不中止的假 signal，保证 STOP 实时传播）
-            signal: signal ?? new AbortController().signal,
-            label: `${name}（${options.provider}）`,
-          })
-        } catch (error) {
-          // 问题 2 定位日志②：start() 本身抛错（infrastructure fault）——区分"没调到 delegate"
-          logger.error('weave-addsubagent', 'start() 抛错（基础设施故障）', error instanceof Error ? error : new Error(String(error)), {
-            node: name,
-            provider: options.provider,
-            elapsedMs: Date.now() - startAt,
-          })
-          throw error
+
+        const existingChildId = childIdByNode.get(name)
+        let result: { output: Array<{ type: string; text?: string }>; stopReason: string }
+
+        if (!existingChildId) {
+          // 首次激活：startContinuable 建 durable child（问题三最小版）
+          try {
+            const started = await nodeCtx.ctx.subagents.startContinuable({
+              provider: options.provider,
+              label: `${name}（${options.provider}）`,
+              request: {
+                prompt: [{ type: 'text', text: prompt }],
+                parent: agent as never,
+                ...(options.role !== undefined ? { label: `${name}（${options.provider}）` } : {}),
+              },
+              signal: signal ?? new AbortController().signal,
+            })
+            childIdByNode.set(name, started.childId)
+            // 问题 2 定位日志③：continuable 创建成功（childId 持久化）
+            logger.info('weave-addsubagent', 'startContinuable 返回', {
+              node: name,
+              provider: options.provider,
+              childId: started.childId,
+              elapsedMs: Date.now() - startAt,
+            })
+            // 等待初始 turn 完成（subagent/end 事件驱动；这里用生命周期事件等待）
+            result = await waitForSubagentEnd(nodeCtx.ctx, started.childId, signal)
+          } catch (error) {
+            // 问题 2 定位日志②：startContinuable 抛错（区分"没调到 delegate"）
+            logger.error('weave-addsubagent', 'startContinuable() 抛错', error instanceof Error ? error : new Error(String(error)), {
+              node: name,
+              provider: options.provider,
+              elapsedMs: Date.now() - startAt,
+            })
+            throw error
+          }
+        } else {
+          // 循环回退/后续激活：sendMessage 追加反馈（问题三预留；MVP-4 最小版仅创建）
+          // 注：sendMessage 单向投递，结果经 subagent/end 事件异步返回，见 waitForSubagentEnd
+          const feedback = buildFeedbackFromState(state, name)
+          try {
+            await nodeCtx.ctx.subagents.sendMessage(
+              agent as never,
+              existingChildId as never, // SessionId 品牌类型由运行期保证
+              [{ type: 'text', text: feedback }],
+              { signal: signal ?? new AbortController().signal },
+            )
+            logger.info('weave-addsubagent', 'sendMessage 反馈已投递', {
+              node: name,
+              childId: existingChildId,
+              feedbackLen: feedback.length,
+            })
+            result = await waitForSubagentEnd(nodeCtx.ctx, existingChildId, signal)
+          } catch (error) {
+            logger.error('weave-addsubagent', 'sendMessage 失败', error instanceof Error ? error : new Error(String(error)), {
+              node: name,
+              childId: existingChildId,
+            })
+            throw error
+          }
         }
-        // 问题 2 定位日志③：start() 成功返回（确认 run 对象有效 / 子代理 session id）
-        logger.info('weave-addsubagent', 'start() 返回', {
-          node: name,
-          provider: options.provider,
-          runId: run.id ?? '',
-          hasLocalAgent: run.localAgent !== undefined,
-          elapsedMs: Date.now() - startAt,
-        })
-        const result = await run.result
+
         const text = result.output.map((b) => (b.type === 'text' ? b.text : '')).join('\n').trim()
         // 问题 2 定位日志④：result 内容（确认 stopReason / output 是否为空）
-        logger.info('weave-addsubagent', 'run.result 返回', {
+        logger.info('weave-addsubagent', '子代理执行返回', {
           node: name,
           provider: options.provider,
-          runId: run.id ?? '',
+          childId: childIdByNode.get(name) ?? '',
           stopReason: result.stopReason,
           outputBlocks: result.output.length,
           textLen: text.length,

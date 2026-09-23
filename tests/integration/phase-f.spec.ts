@@ -18,9 +18,11 @@ import { createMessageBus } from '../../src/l2-engine/message-bus'
 const RO = { graphVersion: '0.1.0', graphSchemaHash: 'hash' }
 const fakeAgent = { sessionId: 'parent-1', options: {} }
 
-/** mock ctx.subagents（记录调用 + 可配延迟 + 输出）。 */
+/** mock ctx.subagents（记录调用 + 可配延迟 + 输出；startContinuable + subagent/end 事件）。 */
 function mockCtx(outputs: Record<string, string>, delayMs = 2) {
   const calls: string[] = []
+  const endListeners: Array<(info: { id: string; stopReason: string; lastAssistantMessage?: Array<{ type: string; text?: string }> }) => void> = []
+  let seq = 0
   const ctx = {
     get: () => undefined,
     emit: () => {},
@@ -28,16 +30,34 @@ function mockCtx(outputs: Record<string, string>, delayMs = 2) {
     subagents: {
       list: () => [],
       getProvider: () => undefined,
-      start: async (provider: string, req: { prompt: Array<{ type: string; text: string }> }) => {
+      startContinuable: async (spec: { provider: string; request: { prompt: Array<{ type: string; text: string }> }; signal?: AbortSignal }) => {
+        const provider = spec.provider
         calls.push(provider)
         await new Promise((r) => setTimeout(r, delayMs))
         const text = outputs[provider] ?? `产出-${provider}`
-        return { result: Promise.resolve({ output: [{ type: 'text', text }], stopReason: 'completed' }) }
+        const childId = `child-${++seq}`
+        setTimeout(() => {
+          for (const cb of [...endListeners]) {
+            cb({ id: childId, stopReason: 'completed', lastAssistantMessage: [{ type: 'text', text }] })
+          }
+        }, 0)
+        return { childId: childId as never, messageId: 'm1' as never }
       },
+      sendMessage: async () => 'm2' as never,
     },
     effect: (fn: () => unknown) => {
       const d = fn()
       return () => { if (typeof d === 'function') d() }
+    },
+    on: (name: string, cb: (info: unknown) => void) => {
+      if (name === 'subagent/end') endListeners.push(cb as never)
+      return () => {}
+    },
+    off: (name: string, cb: (info: unknown) => void) => {
+      if (name === 'subagent/end') {
+        const i = endListeners.indexOf(cb as never)
+        if (i >= 0) endListeners.splice(i, 1)
+      }
     },
   } as never
   return { ctx: ctx as never, calls }

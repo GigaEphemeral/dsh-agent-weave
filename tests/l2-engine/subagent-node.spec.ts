@@ -1,11 +1,12 @@
 /**
- * P3.A.1 addSubagent 验证（MVP-3 Phase A）。
+ * P3.A.1 + 问题三 addSubagent 验证（MVP-4 最小版：startContinuable + subagent/end 事件）。
  *
  * mock ctx.subagents（零 LLM）验证：
  * - addSubagent 注册真实子代理节点
- * - start 收到 provider + prompt（含 user_input/upstream）
+ * - startContinuable 收到 provider + prompt（含 user_input/upstream）
+ * - 子代理 childId 持久化（同一节点复用）
  * - 产物落盘 artifactsRoot/graph-artifacts/<node>/<artifact>
- * - 输出映射回 State（messages/artifacts/active_agent）
+ * - 输出经 subagent/end 事件映射回 State（messages/artifacts）
  */
 import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
@@ -16,9 +17,21 @@ import { createStateGraph } from '../../src/l2-engine/state-graph'
 const RO = { graphVersion: '0.1.0', graphSchemaHash: 'hash' }
 const fakeAgent = { sessionId: 'parent-1', options: {} }
 
-/** mock ctx：subagents.start 记录调用并返回固定输出。 */
+/** mock ctx：subagents.startContinuable 记录调用 + 支持触发 subagent/end。 */
 function mockCtx() {
   const calls: Array<{ provider: string; prompt: string; signal?: AbortSignal }> = []
+  const endListeners: Array<(info: { id: string; stopReason: string; lastAssistantMessage?: Array<{ type: string; text?: string }> }) => void> = []
+  const started: Array<{ provider: string; childId: string }> = []
+  const on = vi.fn((name: string, cb: (info: unknown) => void) => {
+    if (name === 'subagent/end') endListeners.push(cb as never)
+    return () => {}
+  })
+  const off = vi.fn((name: string, cb: (info: unknown) => void) => {
+    if (name === 'subagent/end') {
+      const i = endListeners.indexOf(cb as never)
+      if (i >= 0) endListeners.splice(i, 1)
+    }
+  })
   const ctx = {
     get: () => undefined,
     emit: () => {},
@@ -26,10 +39,22 @@ function mockCtx() {
     subagents: {
       list: () => [],
       getProvider: () => undefined,
-      start: async (provider: string, req: { prompt: Array<{ type: string; text: string }>; signal?: AbortSignal }) => {
-        calls.push({ provider, prompt: req.prompt[0]?.text ?? '', signal: req.signal })
-        return { result: Promise.resolve({ output: [{ type: 'text', text: `产出-${provider}` }], stopReason: 'completed' }) }
+      // 问题三最小版：startContinuable 建 durable child
+      startContinuable: async (spec: { provider: string; request: { prompt: Array<{ type: string; text: string }>; parent?: unknown }; signal?: AbortSignal }) => {
+        const provider = spec.provider
+        const prompt = spec.request.prompt[0]?.text ?? ''
+        calls.push({ provider, prompt, signal: spec.signal })
+        const childId = `child-${calls.length}`
+        started.push({ provider, childId })
+        // 模拟子代理执行完成 → 异步触发 subagent/end
+        setTimeout(() => {
+          for (const cb of [...endListeners]) {
+            cb({ id: childId, stopReason: 'completed', lastAssistantMessage: [{ type: 'text', text: `产出-${provider}` }] })
+          }
+        }, 0)
+        return { childId: childId as never, messageId: 'm1' as never }
       },
+      sendMessage: async () => 'm2' as never,
     },
     effect: (fn: () => unknown) => {
       const disposer = fn()
@@ -37,12 +62,14 @@ function mockCtx() {
         if (typeof disposer === 'function') disposer()
       }
     },
+    on,
+    off,
   }
-  return { ctx: ctx as never, calls }
+  return { ctx: ctx as never, calls, started }
 }
 
-describe('P3.A.1 addSubagent', () => {
-  it('role 节点执行真实 start 并落盘产物', async () => {
+describe('P3.A.1 + 问题三 addSubagent（continuable）', () => {
+  it('role 节点 startContinuable 建 durable child 并落盘产物', async () => {
     const root = mkdtempSync(join(tmpdir(), 'weave-sub-'))
     try {
       const { ctx, calls } = mockCtx()
@@ -56,7 +83,7 @@ describe('P3.A.1 addSubagent', () => {
       expect(calls).toHaveLength(1)
       expect(calls[0]?.provider).toBe('R6-developer')
       expect(calls[0]?.prompt).toContain('写个计算器')
-      // 产物落盘
+      // 产物落盘（经 subagent/end 事件输出）
       const file = join(root, 'graph-artifacts', 'dev', 'main.ts')
       expect(existsSync(file)).toBe(true)
       expect(readFileSync(file, 'utf8')).toContain('产出-R6-developer')
@@ -99,7 +126,7 @@ describe('P3.A.1 addSubagent', () => {
     }
   })
 
-  it('P3.A.3：run 的 signal 贯通到子代理 start', async () => {
+  it('P3.A.3：run 的 signal 贯通到 startContinuable', async () => {
     const { ctx, calls } = mockCtx()
     const g = createStateGraph<Record<string, unknown>>(ctx)
     g.addSubagent('dev', { provider: 'R6-developer' })

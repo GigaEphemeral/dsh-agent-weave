@@ -125,7 +125,7 @@ export function compileRoleProfile(role: RoleDefinition, options: CompileOptions
 export function compileRoleToProvider(
   role: RoleDefinition,
   options: CompileOptions,
-  delegate: Pick<SubagentProvider, 'start'>,
+  delegate: Pick<SubagentProvider, 'start' | 'prepareContinuable'>,
 ): SubagentProvider {
   const profile = compileRoleProfile(role, options)
 
@@ -155,6 +155,14 @@ export function compileRoleToProvider(
         ...(profile.depthLimit !== undefined ? { maxDepth: profile.depthLimit } : {}),
       }
       return delegate.start(injected)
+    },
+    // 问题三最小版：continuable 子代理（persona/toolFilter/maxDepth 走 request，
+    // manager 自己 compose；此处委托底层 delegate 的 prepareContinuable）
+    async prepareContinuable(request) {
+      if (delegate.prepareContinuable !== undefined) {
+        return delegate.prepareContinuable(request)
+      }
+      return Promise.resolve({})
     },
   }
 }
