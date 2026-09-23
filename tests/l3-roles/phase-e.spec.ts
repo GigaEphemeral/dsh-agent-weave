@@ -39,7 +39,7 @@ describe('P3.E.1/P3.E.2 角色/流程包', () => {
   it('流程包 hash 不一致抛错', () => {
     const dir = mkdtempSync(join(tmpdir(), 'weave-pkg-'))
     const file = join(dir, 'bad.yaml')
-    writeFileSync(file, validYaml.replace("graphSchemaHash: ''", "graphSchemaHash: 'wrong'"), 'utf8')
+    writeFileSync(file, validYaml.replace("graphSchemaHash: 'demo'", "graphSchemaHash: 'wrong'"), 'utf8')
     try {
       expect(() => loadWorkflowPackage(file)).toThrow(/不一致/)
     } finally {
