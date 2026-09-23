@@ -32,7 +32,7 @@ import type {
   TrajectoryEvent,
 } from './types.js'
 import { mergeState } from './atomic-merge.js'
-import { createConcurrencyCounter } from './concurrency-counter.js'
+import { createQueueingCounter } from './concurrency-counter.js'
 import { edgeKey, resolveNextNode } from './condition-edge.js'
 
 export const END = '__END__'
@@ -121,7 +121,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
   const approvalGates = new Map<string, ApprovalGateOptions>()
   let entryPoint: string | null = null
 
-  const concurrency = createConcurrencyCounter(ctx, maxConcurrentChildren)
+  // P3.D.4：排队版并发闸（超限排队等待，非拒绝）
+  const concurrency = createQueueingCounter(ctx, maxConcurrentChildren)
 
   return {
     addNode(name, handler, meta) {
