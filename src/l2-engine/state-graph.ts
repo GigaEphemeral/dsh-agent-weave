@@ -19,7 +19,7 @@
  * - S11：无出边发 warning 级 graph/error 事件（不改变成功语义）
  * - S13：node-end 事件携带 inputTokens/outputTokens/cacheReadTokens/tokenUsed/retryCount
  */
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
@@ -131,6 +131,10 @@ export interface EngineObservability {
   ledger?: RunLedger
   /** Token 分账收集器（node-end 时写，P1-2）。 */
   tokenCollector?: TokenCollector
+  /** P4.B.7：节点完成观察器（返回 signaled 则写 ledger + emit observer-signal）。 */
+  observer?: {
+    observe(node: string, state: Record<string, unknown>): { signaled: boolean; signal?: Record<string, unknown> }
+  }
 }
 
 export function createStateGraph<T extends Record<string, unknown>>(
@@ -141,6 +145,7 @@ export function createStateGraph<T extends Record<string, unknown>>(
   eventSink?: (event: TrajectoryEvent) => void,
   ledger?: RunLedger,
   tokenCollector?: TokenCollector,
+  observer?: EngineObservability['observer'],
 ): StateGraph<T> {
   const nodes = new Map<string, NodeHandler<T>>()
   const nodeMetas = new Map<string, NodeMeta>() // NEW-10
@@ -294,6 +299,31 @@ export function createStateGraph<T extends Record<string, unknown>>(
             })
           }
         }
+        // P4.B.7：node-end 后触发观察者（signaled → ledger + emit observer-signal）
+        if (event.type === 'graph/node-end' && observer && event.node) {
+          try {
+            const result = observer.observe(event.node, state)
+            if (result.signaled && result.signal) {
+              const sigEvt: TrajectoryEvent = {
+                type: 'graph/observer-signal',
+                graphId: event.graphId,
+                node: event.node,
+                timestamp: Date.now(),
+                data: result.signal,
+              }
+              ledger?.append({
+                type: 'observer-signal',
+                graphId: event.graphId,
+                node: event.node,
+                timestamp: sigEvt.timestamp,
+                data: result.signal,
+              })
+              eventSink?.(sigEvt)
+            }
+          } catch {
+            // 观察失败不阻塞执行（fail-open）
+          }
+        }
         ensureTraceFile()
         if (trace.file) {
           try {
@@ -312,6 +342,30 @@ export function createStateGraph<T extends Record<string, unknown>>(
         : new Map<string, number>()
 
       while (current !== END) {
+        // P4.D.1：节点边界 STOP 检查（先于迭代计数——STOP 应立即可终止）
+        if (artifactsRoot && existsSync(join(artifactsRoot, 'STOP'))) {
+          emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { stopped: true } })
+          return { graphId, success: true, finalState: state, trajectory, iterations: iteration, data: { stopped: true } }
+        }
+        // P4.D.1：节点边界 PAUSE 检查（等待 RESUME/STOP；200ms 轮询 + 外部中止）
+        if (artifactsRoot && existsSync(join(artifactsRoot, 'PAUSE'))) {
+          emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { status: 'paused', pausedAt: Date.now() } })
+          // 暂停等待循环：RESUME 文件出现或 STOP 文件出现或 signal 中止
+          while (existsSync(join(artifactsRoot, 'PAUSE'))) {
+            if (options.signal?.aborted) {
+              emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { status: 'failed', reason: 'aborted' } })
+              return { graphId, success: false, finalState: state, trajectory, iterations: iteration, error: new Error('暂停等待被中止') }
+            }
+            if (existsSync(join(artifactsRoot, 'STOP'))) {
+              emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { stopped: true } })
+              return { graphId, success: true, finalState: state, trajectory, iterations: iteration, data: { stopped: true } }
+            }
+            await new Promise((r) => setTimeout(r, 200))
+          }
+          // 恢复：发 node-start 续跑（PAUSE 文件被删除或 RESUME 写入）
+          emit({ type: 'graph/checkpoint-written', graphId, node: current, timestamp: Date.now(), data: { resumed: true } })
+        }
+
         // RES.10 §一.3：计数在"进入节点前"
         if (++iteration > maxIterations) {
           const err = new Error(`迭代次数超过上限（${maxIterations}），疑似死循环，已终止。`)
@@ -335,7 +389,19 @@ export function createStateGraph<T extends Record<string, unknown>>(
           const gate = approvalGates.get(current)
           const approvalService = ctx.get('approval') as ApprovalServiceLike | undefined
           if (gate) {
-            if (!approvalService) {
+            // P1-3：优先走分级审批策略（approvalPolicy 存在时）
+            if (options.approvalPolicy) {
+              const gateResult = await options.approvalPolicy.gate(
+                { level: 'L2', reason: gate.reason ?? `节点 ${current} 需审批`, nodeId: current },
+                { ...(options.signal !== undefined ? { signal: options.signal } : {}) },
+              )
+              if (gateResult.outcome !== 'allowed') {
+                // 超时自动继续/升级仍可放行（L1 timeout-auto-continue 语义）
+                if (gateResult.outcome !== 'timeout-auto-continue') {
+                  throw new Error(`审批门 "${current}" 未通过（${gateResult.outcome}：${gateResult.audit}）`)
+                }
+              }
+            } else if (!approvalService) {
               if (gate.required !== false) {
                 throw new Error(`审批门 "${current}" 需要 ctx.approval 服务（可设 required=false 跳过）`)
               }

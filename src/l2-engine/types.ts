@@ -80,6 +80,7 @@ export interface TrajectoryEvent {
     | 'graph/end'
     | 'graph/checkpoint-written'
     | 'graph/loop-iteration'
+    | 'graph/observer-signal'  // P4.B.7：观察者信号
   graphId: string
   /** 关联节点（graph/start、graph/end、graph/error 可为空）。 */
   node?: string
@@ -98,6 +99,8 @@ export interface GraphExecutionResult<T> {
   trajectory: TrajectoryEvent[]
   iterations: number
   error?: Error
+  /** P4.D.1：附加数据（如 paused/stopped 标记）。 */
+  data?: Record<string, unknown>
 }
 
 /** 运行选项（checkpoint 必需 + graphVersion + agent + 中止信号）。 */
@@ -116,6 +119,13 @@ export interface RunOptions<T> {
   initialIteration?: number
   /** 恢复场景：从最近 checkpoint 读回的 loopUsage（NEW-2 修复：loopUsed 恢复接通）。 */
   initialLoopUsage?: Record<string, number>
+  /** P1-3：分级审批策略（存在时审批门优先走 policy.gate）。 */
+  approvalPolicy?: {
+    gate(
+      req: { level: 'L1' | 'L2' | 'L3'; reason: string; nodeId: string },
+      opts?: { signal?: AbortSignal },
+    ): Promise<{ outcome: string; audit: string }>
+  }
 }
 
 /** 节点元数据（NEW-10：currentRole 数据来源）。 */
