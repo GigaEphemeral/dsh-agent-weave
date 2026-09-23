@@ -8,6 +8,7 @@
  *
  * 工具名遵守 provider 规范 `^[a-zA-Z0-9_-]{1,128}$`（P3-坑7）。
  */
+import { isAbsolute, join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
@@ -15,15 +16,42 @@ import { computeGraphSchemaHash, parseGraphDefinitionYaml } from '../l2-engine/g
 import { validateGraph, type ValidationResult } from '../l2-engine/static-validator.js'
 import type { GraphDefinitionSpec, GraphEdgeSpec } from '../l2-engine/types.js'
 
-/** 读取并解析图 YAML 文件（错误 → 抛带路径的 Error）。 */
-export function loadGraphSpec(filePath: string): GraphDefinitionSpec {
+/**
+ * 从工具执行上下文解析会话工作区（问题 3：图文件路径基准不再用 process.cwd()）。
+ *
+ * 来源链（均为可选，运行时存在性检查）：
+ * 1. exec.workspace（DSH 工具运行时注入的会话工作区）
+ * 2. exec.agent.session.header.cwd（Session 持久字段）
+ * 3. 回退 process.cwd()（兜底）
+ */
+export function resolveExecWorkspace(exec: unknown): string | undefined {
+  if (!exec || typeof exec !== 'object') return undefined
+  const e = exec as { workspace?: unknown; agent?: unknown }
+  if (typeof e.workspace === 'string' && e.workspace) return e.workspace
+  const agent = e.agent as { session?: { header?: { cwd?: unknown } } } | undefined
+  const cwd = agent?.session?.header?.cwd
+  if (typeof cwd === 'string' && cwd) return cwd
+  return undefined
+}
+
+/**
+ * 把用户给的图路径解析为绝对路径（问题 3：相对路径基于会话工作区，非 process.cwd()）。
+ * 绝对路径原样返回；相对路径 join(workspace ?? process.cwd(), filePath)。
+ */
+export function resolveGraphPath(filePath: string, workspace?: string): string {
+  return isAbsolute(filePath) ? filePath : join(workspace ?? process.cwd(), filePath)
+}
+
+/** 读取并解析图 YAML 文件（问题 3：错误路径展示解析后的绝对路径）。 */
+export function loadGraphSpec(filePath: string, workspace?: string): GraphDefinitionSpec {
+  const abs = resolveGraphPath(filePath, workspace)
   let raw: string
   try {
-    raw = readFileSync(filePath, 'utf8')
+    raw = readFileSync(abs, 'utf8')
   } catch (error) {
-    throw new Error(`图文件读取失败: ${filePath}: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`图文件读取失败: ${abs}: ${error instanceof Error ? error.message : String(error)}`)
   }
-  return parseGraphDefinitionYaml(raw, filePath)
+  return parseGraphDefinitionYaml(raw, abs)
 }
 
 /** 构建 validate 文本输出。 */
@@ -124,11 +152,12 @@ export function registerGraphCommands(ctx: Context): () => void {
             return [{ type: 'text', text: value }]
           },
         },
-        async execute(args) {
-          const spec = loadGraphSpec(args.path)
+        async execute(args, exec) {
+          const workspace = resolveExecWorkspace(exec)
+          const spec = loadGraphSpec(args.path, workspace)
           const roles = new Set(ctx.subagents.list())
           const result = validateGraph(spec, { registeredRoles: roles })
-          return formatValidation(args.path, spec, result)
+          return formatValidation(resolveGraphPath(args.path, workspace), spec, result)
         },
       }),
     ),
@@ -148,8 +177,9 @@ export function registerGraphCommands(ctx: Context): () => void {
             return [{ type: 'text', text: value }]
           },
         },
-        async execute(args) {
-          const spec = loadGraphSpec(args.path)
+        async execute(args, exec) {
+          const workspace = resolveExecWorkspace(exec)
+          const spec = loadGraphSpec(args.path, workspace)
           return renderAsciiGraph(spec)
         },
       }),

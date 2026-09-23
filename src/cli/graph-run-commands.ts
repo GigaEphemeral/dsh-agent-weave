@@ -8,7 +8,7 @@
 import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
-import { loadGraphSpec } from './graph-commands.js'
+import { loadGraphSpec, resolveExecWorkspace } from './graph-commands.js'
 import { computeGraphSchemaHash } from '../l2-engine/graph-definition.js'
 import { validateGraph } from '../l2-engine/static-validator.js'
 import { createStateGraph, SKIP } from '../l2-engine/state-graph.js'
@@ -36,13 +36,15 @@ export async function runGraphRealTool(
   parent: unknown,
   outputDir?: string,
   initialState?: Record<string, unknown>,
+  workspace?: string,
 ) {
   const validation = validateGraph(spec, { registeredRoles: new Set(ctx.subagents.list()) })
   if (!validation.valid) {
     return { ok: false, message: `图校验失败:\n${validation.errors.map((e) => `  · ${e.path}: ${e.message}`).join('\n')}` }
   }
 
-  const root = resolveArtifactsRoot({ explicit: outputDir })
+  // 问题 3：产物根优先 output_dir，其次 workspace/productions，最后 cwd/productions
+  const root = resolveArtifactsRoot({ explicit: outputDir, workspace })
   // P4.0.10：graphId 一次生成全程复用（含全局共享 bus）
   const graphId = `graph-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const bus = setGlobalBus(graphId)
@@ -167,7 +169,9 @@ export function registerGraphRunCommand(ctx: Context): () => void {
         },
       },
       async execute(args, exec) {
-        const spec = loadGraphSpec(args.path)
+        // 问题 3：图路径与产物默认基准用会话工作区（非 process.cwd()）
+        const workspace = resolveExecWorkspace(exec)
+        const spec = loadGraphSpec(args.path, workspace)
         const r = await runGraphRealTool(
           ctx,
           spec,
@@ -175,6 +179,7 @@ export function registerGraphRunCommand(ctx: Context): () => void {
           exec.agent,
           args.output_dir,
           args.initial_state as Record<string, unknown> | undefined,
+          workspace,
         )
         return [
           r.snapshot ?? '',

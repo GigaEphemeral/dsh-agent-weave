@@ -18,7 +18,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
-import { loadGraphSpec } from './graph-commands.js'
+import { loadGraphSpec, resolveExecWorkspace } from './graph-commands.js'
 import { computeGraphSchemaHash } from '../l2-engine/graph-definition.js'
 import { validateGraph } from '../l2-engine/static-validator.js'
 import { createStateGraph, END } from '../l2-engine/state-graph.js'
@@ -149,8 +149,10 @@ export function registerVisualCommands(ctx: Context): () => void {
             return [{ type: 'text', text: value }]
           },
         },
-        async execute(args) {
-          const spec = loadGraphSpec(args.path)
+        async execute(args, exec) {
+          // 问题 3：图路径与产物默认基准用会话工作区
+          const workspace = resolveExecWorkspace(exec)
+          const spec = loadGraphSpec(args.path, workspace)
           // P4.0.10：graphId 一次生成，全程复用（含全局共享 bus）
           const graphId = `graph-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
           const bus = setGlobalBus(graphId)
@@ -162,7 +164,7 @@ export function registerVisualCommands(ctx: Context): () => void {
           detector.start(bus, (a) => capture(a.message))
 
           bus.handle({ type: 'graph/start', graphId, timestamp: Date.now() })
-          const r = await runGraphMock(ctx, spec, bus)
+          const r = await runGraphMock(ctx, spec, bus, resolveArtifactsRoot({ workspace }))
           view2.stop()
 
           const header = formatStatusHeader(bus.getSnapshot(), false)
@@ -186,15 +188,18 @@ export function registerVisualCommands(ctx: Context): () => void {
             return [{ type: 'text', text: value }]
           },
         },
-        async execute(args) {
-          const spec = loadGraphSpec(args.path)
+        async execute(args, exec) {
+          // 问题 3：图路径与产物默认基准用会话工作区
+          const workspace = resolveExecWorkspace(exec)
+          const spec = loadGraphSpec(args.path, workspace)
+          const root = resolveArtifactsRoot({ workspace })
           const graphId = `graph-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
           const bus = setGlobalBus(graphId)
           bus.handle({ type: 'graph/start', graphId, timestamp: Date.now() })
-          const r = await runGraphMock(ctx, spec, bus)
+          const r = await runGraphMock(ctx, spec, bus, root)
           const snap = bus.getSnapshot()
           // P4.0.9：pause 状态传入 HTML 报告（暂停原因/下一角色/已完成步）
-          const pauseState = readPauseState(pauseStatePath(resolveArtifactsRoot({})))
+          const pauseState = readPauseState(pauseStatePath(root))
           const html = renderHtmlReport(
             snap,
             spec.edges.map((e) => ({ from: e.from, to: e.to })),
@@ -206,7 +211,7 @@ export function registerVisualCommands(ctx: Context): () => void {
                 }
               : undefined,
           )
-          const reportsDir = join(resolveArtifactsRoot({}), 'reports')
+          const reportsDir = join(root, 'reports')
           mkdirSync(reportsDir, { recursive: true })
           const file = join(reportsDir, `${graphId}.html`)
           writeFileSync(file, html, 'utf8')
@@ -252,10 +257,11 @@ export function registerVisualCommands(ctx: Context): () => void {
             return [{ type: 'text', text: value }]
           },
         },
-        async execute(args) {
+        async execute(args, exec) {
           const { readdirSync, readFileSync, statSync } = await import('node:fs')
           const { join } = await import('node:path')
-          const tracesDir = join(resolveArtifactsRoot({}), 'traces')
+          // 问题 3：trace 目录基准用会话工作区
+          const tracesDir = join(resolveArtifactsRoot({ workspace: resolveExecWorkspace(exec) }), 'traces')
           let files: string[]
           try {
             files = readdirSync(tracesDir).filter((f) => f.endsWith('.jsonl'))
