@@ -146,12 +146,30 @@ function renderSvg(nodeIds: string[], edges: Array<{ from: string; to: string }>
 </svg>`
 }
 
+/** 暂停信息（P3.F.1：报告展示暂停状态 + 恢复点）。 */
+export interface PauseReportInfo {
+  pauseReason?: string
+  nextRoleId?: string
+  completedSteps?: number
+}
+
 /** 生成完整 HTML 报告。 */
-export function renderHtmlReport(snap: ExecutionSnapshot, edges: Array<{ from: string; to: string }> = []): string {
+export function renderHtmlReport(
+  snap: ExecutionSnapshot,
+  edges: Array<{ from: string; to: string }> = [],
+  pause?: PauseReportInfo,
+): string {
   const tokens = summarizeTokens(snap.trajectory)
   const totalTokens = tokens.reduce((sum, t) => sum + t.total, 0)
   const statusClass = snap.status === 'completed' ? 'success' : snap.status === 'failed' ? 'failed' : 'running'
   const statusText = snap.status === 'completed' ? '完成' : snap.status === 'failed' ? '失败' : '运行中'
+
+  // P3.F.1：暂停状态展示（若有）
+  const pauseHtml = pause
+    ? `<p class="pause-banner">⏸ 已暂停：${pause.pauseReason ?? '（未知）'}${
+        pause.nextRoleId ? `｜下一个角色：${pause.nextRoleId}` : ''
+      }${pause.completedSteps !== undefined ? `｜已完成步骤：${pause.completedSteps}` : ''}</p>`
+    : ''
 
   const timelineHtml = snap.trajectory
     .map((e) => {
@@ -181,6 +199,7 @@ export function renderHtmlReport(snap: ExecutionSnapshot, edges: Array<{ from: s
   .status-success { color: #16a34a; font-weight: bold; }
   .status-failed { color: #dc2626; font-weight: bold; }
   .status-running { color: #d97706; font-weight: bold; }
+  .pause-banner { background: #fef3c7; border: 1px solid #f59e0b; padding: 10px; border-radius: 6px; margin: 10px 0; }
   .timeline-entry { padding: 4px 0; border-bottom: 1px solid #eee; font-family: monospace; }
   .timeline-entry.warn { color: #d97706; }
   .timeline-entry.error { color: #dc2626; }
@@ -201,6 +220,7 @@ export function renderHtmlReport(snap: ExecutionSnapshot, edges: Array<{ from: s
     <p>总耗时: ${(snap.elapsedMs / 1000).toFixed(1)}s</p>
     <p>总 Token: ${totalTokens.toLocaleString()}</p>
     <p>retry_count: ${snap.retryCount} / ${snap.maxRetry}</p>
+    ${pauseHtml}
   </section>
   <section>
     <h2>图结构</h2>
