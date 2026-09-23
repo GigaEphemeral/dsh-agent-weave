@@ -31,6 +31,8 @@ capability:
 quality_gate:
   - tsc 0 error
   - 单测全绿
+  - 至少 1 个代码文件落地
+  - develop.md 非空
 token_budget: 2500
 handoff:
   upstream:
