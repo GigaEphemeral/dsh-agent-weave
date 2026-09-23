@@ -126,6 +126,8 @@ export interface RunOptions<T> {
       opts?: { signal?: AbortSignal },
     ): Promise<{ outcome: string; audit: string }>
   }
+  /** ★ 问题一步骤0：外部指定的 graphId（缺省引擎自己生成）。 */
+  graphId?: string
 }
 
 /** 节点元数据（NEW-10：currentRole 数据来源）。 */

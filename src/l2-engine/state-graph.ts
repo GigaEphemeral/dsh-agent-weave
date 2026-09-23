@@ -313,7 +313,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
       if (!options.graphVersion) throw new Error('RunOptions.graphVersion 是必需的（RES.8 §三.1）')
       if (!options.graphSchemaHash) throw new Error('RunOptions.graphSchemaHash 是必需的（RES.8 §三.1）')
 
-      const graphId = `graph-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      // ★ 问题一步骤0：graphId 从 options 读（外部指定统一值），缺省才自己生成
+      const graphId = options.graphId ?? `graph-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const trajectory: TrajectoryEvent[] = []
       let state = initialState
       let current: string = entryPoint

@@ -75,6 +75,25 @@ export function registerVisualRoutes(
     }
     const method = req.method ?? 'GET'
 
+    // GET /api/weave/stream —— 全局事件流（★ 问题一步骤2：前端感知新图启动）
+    if (rest === '/stream' || rest === '/stream/') {
+      if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+      const lastEventId = req.headers?.['last-event-id']
+      const raw = Array.isArray(lastEventId) ? lastEventId[0] : lastEventId
+      const subId = broker.subscribe('*', res as never, raw)
+      req.on?.('close', () => broker.unsubscribe(subId))
+      return
+    }
+
+    // GET /api/weave/graphs/active —— 当前活跃图（★ 问题一步骤5：前端兜底绑定）
+    if (rest === '/graphs/active' || rest === '/graphs/active/') {
+      if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+      const snap = getGlobalSnapshot()
+      if (!snap || !snap.graphId) { json(res, 404, { error: 'no active graph' }); return }
+      json(res, 200, { graphId: snap.graphId })
+      return
+    }
+
     // GET /api/weave/graphs（无 graphId）
     if (rest === '/graphs' || rest === '/graphs/') {
       if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }

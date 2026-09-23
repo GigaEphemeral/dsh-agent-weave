@@ -89,5 +89,30 @@ export function apply(ctx: Context): void {
         diag('D3 FAILED', { error: error instanceof Error ? error.message : String(error) })
     }
 
+    // ★ 问题一步骤3：订阅全局 SSE，捕获新图启动（graph-start）→ 广播自定义事件
+    try {
+        diag('global SSE subscribe start')
+        const es = new EventSource('/api/weave/stream')
+        es.onmessage = (msg) => {
+            try {
+                const evt = JSON.parse(msg.data) as { event_type?: string; trace_id?: string }
+                if (evt.event_type !== 'graph-start') return
+                const graphId = evt.trace_id
+                if (!graphId) return
+                diag('graph-start captured', { graphId })
+                window.dispatchEvent(new CustomEvent('weave:graph-started', { detail: { graphId } }))
+            } catch {
+                // 忽略解析失败
+            }
+        }
+        es.onerror = () => {
+            // EventSource 自动重连
+        }
+        ctx.effect(() => () => es.close())
+        diag('global SSE subscribe ok')
+    } catch (error) {
+        diag('global SSE FAILED', { error: error instanceof Error ? error.message : String(error) })
+    }
+
     diag('apply done')
 }

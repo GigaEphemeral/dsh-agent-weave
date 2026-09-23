@@ -18,7 +18,6 @@ import { resolveArtifactsRoot } from '../l4-visual/host/artifacts-root.js'
 import { registerGraph } from '../l4-visual/host/spec-registry.js'
 import { getGlobalTokens } from '../l4-visual/host/visual-runtime.js'
 import { createRunLedger, type RunLedger } from '../l5-observability/run-ledger.js'
-import { formatStatusHeader } from '../l4-visual/host/terminal-view.js'
 import type { GraphDefinitionSpec } from '../l2-engine/types.js'
 
 /** 全局 RunLedger（消息流桥接 + 审计；惰性创建）。 */
@@ -37,6 +36,7 @@ export async function runGraphRealTool(
   outputDir?: string,
   initialState?: Record<string, unknown>,
   workspace?: string,
+  signal?: AbortSignal,
 ) {
   const validation = validateGraph(spec, { registeredRoles: new Set(ctx.subagents.list()) })
   if (!validation.valid) {
@@ -45,7 +45,7 @@ export async function runGraphRealTool(
 
   // 问题 3：产物根优先 output_dir，其次 workspace/productions，最后 cwd/productions
   const root = resolveArtifactsRoot({ explicit: outputDir, workspace })
-  // P4.0.10：graphId 一次生成全程复用（含全局共享 bus）
+  // P4.0.10 + 问题一步骤0：graphId 一次生成，全程复用（bus/registry/graph.run 同一值）
   const graphId = `graph-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const bus = setGlobalBus(graphId)
   bus.handle({ type: 'graph/start', graphId, timestamp: Date.now() })
@@ -121,29 +121,37 @@ export async function runGraphRealTool(
   // checkpoint 回调：引擎 emit 已经 eventSink 桥接 checkpoint-written 到 bus，此处占位
   const checkpoint = async () => {}
 
-  const result = await graph.run(
-    // P4.0.8：initial_state 支持（默认字段 + 用户覆盖）
-    {
-      messages: [],
-      retry_count: 0,
-      max_iterations: spec.maxIterations ?? 25,
-      user_input: userInput,
-      ...(initialState ?? {}),
-    } as Record<string, unknown>,
-    {
+  // ★ 问题一步骤1：图在后台跑（不 await），工具立即返回 graphId
+  const initialStateFull = {
+    messages: [],
+    retry_count: 0,
+    max_iterations: spec.maxIterations ?? 25,
+    user_input: userInput,
+    ...(initialState ?? {}),
+  } as Record<string, unknown>
+
+  void graph
+    .run(initialStateFull, {
       checkpoint,
       graphVersion: spec.graphVersion,
       graphSchemaHash: spec.graphSchemaHash ?? computeGraphSchemaHash(spec),
       agent: parent as never,
-    },
-  )
+      ...(signal !== undefined ? { signal } : {}),
+      graphId, // ★ 问题一步骤0：统一 graphId（外部指定）
+    })
+    .then((result) => {
+      ctx.logger.info('weave', '图执行结束', { graphId, success: result.success, iterations: result.iterations })
+    })
+    .catch((err) => {
+      ctx.logger.error('weave', '图执行失败', err instanceof Error ? err : new Error(String(err)), { graphId })
+    })
 
   return {
-    ok: result.success,
-    message: result.error?.message ?? '图执行成功',
+    ok: true,
+    status: 'started' as const, // ★ 问题一步骤1：图已启动未完成
+    message: '图已启动（异步执行中）',
     graphId,
     artifactsRoot: root,
-    snapshot: formatStatusHeader(bus.getSnapshot(), false),
     tracesDir: join(root, 'traces'),
   }
 }
@@ -154,8 +162,9 @@ export function registerGraphRunCommand(ctx: Context): () => void {
     defineTool({
       name: 'weave_run_graph',
       description:
-        '运行真实图：读用户 YAML 图 DSL → 按 roleRef 流转真实子代理 → 产物落盘 output_dir（默认 <cwd>/productions）。' +
-        '参数 path=图YAML, user_input=需求, output_dir=可选产物目录。返回执行结果+快照+trace路径。',
+        '启动图执行（**异步**）：读用户 YAML 图 DSL → 按 roleRef 流转真实子代理 → **立即返回 graphId**。' +
+        '图在后台跑，前端看板经 graphId 订阅实时进展。' +
+        '参数 path=图YAML, user_input=需求, output_dir=可选产物目录。返回值 status="started" 表示图已启动未完成。',
       parameters: {
         path: { type: 'string', required: true, description: '图 YAML 文件路径' },
         user_input: { type: 'string', required: true, description: '用户一句话需求' },
@@ -180,14 +189,14 @@ export function registerGraphRunCommand(ctx: Context): () => void {
           args.output_dir,
           args.initial_state as Record<string, unknown> | undefined,
           workspace,
+          exec.signal,
         )
         return [
-          r.snapshot ?? '',
-          '',
-          r.ok ? `✅ ${r.message}` : `❌ ${r.message}`,
+          `✅ ${r.message}`,
           `图 ID: ${r.graphId}`,
           `产物目录: ${r.artifactsRoot}`,
           `进度 trace: ${r.tracesDir}/graph-*.jsonl（tail 观测：Get-Content -Wait）`,
+          `（图在后台异步执行，前端看板经 graphId 订阅实时进展）`,
         ].join('\n')
       },
     }),

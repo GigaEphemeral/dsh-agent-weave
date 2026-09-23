@@ -4,7 +4,7 @@
  * 挂载于 conversation.view（list）。未打开时返回 null（不占主区）。
  * 布局：控制条 + 图画布 + 面板网格（Token/审批/信号/消息流/节点活动/历史/恢复）。
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useDashboardOpen } from '../state/dashboard-state'
 import { GraphCanvas } from './GraphCanvas'
 import { ControlBar } from './ControlBar'
@@ -30,6 +30,27 @@ export function WeaveDashboardView(_owner: ConvViewOwnerProps = {}) {
   const [graphId, setGraphId] = useState<string | null>(null)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const { snap, spec, roleMap } = useGraphStream(graphId)
+
+  // ★ 问题一步骤4：监听全局图启动事件，自动绑定 graphId（用户零操作）
+  useEffect(() => {
+    function onGraphStarted(e: Event): void {
+      const { graphId: newId } = (e as CustomEvent<{ graphId: string }>).detail
+      if (newId) setGraphId(newId)
+    }
+    window.addEventListener('weave:graph-started', onGraphStarted)
+    return () => window.removeEventListener('weave:graph-started', onGraphStarted)
+  }, [])
+
+  // ★ 问题一步骤4兜底：graphId 为空时拉当前活跃图
+  useEffect(() => {
+    if (graphId) return
+    fetch('/api/weave/graphs/active')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.graphId) setGraphId(d.graphId as string)
+      })
+      .catch(() => {})
+  }, [graphId])
 
   if (!open) return null
 

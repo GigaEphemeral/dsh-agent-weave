@@ -53,7 +53,8 @@ export function createSseBroker(): SseBroker {
     broadcast(graphId, event) {
       const line = `data: ${JSON.stringify(event)}\n\n`
       for (const [id, sub] of subs) {
-        if (sub.graphId !== graphId) continue
+        // ★ 问题一步骤2：匹配具体 graphId 或全局订阅（'*'）
+        if (sub.graphId !== graphId && sub.graphId !== '*') continue
         try {
           sub.res.write(line)
           if (event.seq !== undefined) sub.lastSeq = event.seq
