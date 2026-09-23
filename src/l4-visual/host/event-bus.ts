@@ -82,6 +82,8 @@ export function createEventBus(options: EventBusOptions = {}): GraphEventBusInte
       case 'graph/node-start':
         current = event.node ?? ''
         nodeStates[event.node ?? ''] = 'running'
+        // L10 修复：从 node-start 的 data.role 提取当前角色
+        if (typeof data.role === 'string') currentRole = data.role
         break
       case 'graph/node-end': {
         const node = event.node ?? ''

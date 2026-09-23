@@ -1,21 +1,28 @@
 /**
- * CLI 可视化命令（MVP-2 T12/T13/T14 集成）。
+ * CLI 可视化命令（MVP-2 T12/T13/T14 + 审查修复）。
  *
  * 注册 3 个 DSH 工具：
  *   - weave_graph_watch：运行图（mock 节点）+ 终端实时视图 + 循环告警
  *   - weave_graph_report：运行图 + 生成 HTML 执行报告（reports/<graphId>.html）
  *   - weave_graph_status：查看最近一次图执行状态快照
  *
- * 执行模式：MVP-2 引擎先跑纯 handler 节点；role 节点用 mock 子代理
- * （异步延迟 + 固定产出，零 LLM 消耗，供可视化验收）。MVP-3 接入真实 subagent。
+ * 审查修复：
+ * - M14：mock handler retry_count 返回增量（与 merge 累加一致）
+ * - WIN3/L12：静态 import 替代动态 import
+ * - S1：run() 传 graphVersion/graphSchemaHash
+ * - S9：trace 事件落盘（artifactsRoot）
+ *
+ * ⚠️ 真实 subagent 跑图（weave_graph_run / runGraphReal）留给 MVP-3，不在本阶段实现。
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { loadGraphSpec } from './graph-commands.js'
+import { computeGraphSchemaHash } from '../l2-engine/graph-definition.js'
 import { validateGraph } from '../l2-engine/static-validator.js'
-import { createStateGraph } from '../l2-engine/state-graph.js'
+import { createStateGraph, END } from '../l2-engine/state-graph.js'
+import { evaluateCondition } from '../l2-engine/condition-edge.js'
 import { createEventBus } from '../l4-visual/host/event-bus.js'
 import { createTerminalView, formatStatusHeader } from '../l4-visual/host/terminal-view.js'
 import { renderHtmlReport } from '../l4-visual/host/html-report.js'
@@ -27,6 +34,11 @@ let lastSnapshot: ReturnType<typeof createEventBus>['getSnapshot'] extends () =>
 
 /** mock 延迟（毫秒）：模拟子代理执行耗时，便于观察实时视图。 */
 const MOCK_NODE_DELAY_MS = 300
+
+/** 产物根目录（FIX.6：从测试环境注入，非 process.cwd 硬编码的单一来源）。 */
+function artifactsRoot(): string {
+  return join(process.cwd(), 'productions')
+}
 
 /**
  * 运行图（mock 模式）：解析 → 校验 → 构建引擎 → 执行 → 返回结果 + 轨迹。
@@ -42,47 +54,58 @@ export async function runGraphMock(ctx: Context, spec: GraphDefinitionSpec, bus:
     ctx,
     spec.maxIterations ?? 25,
     8,
+    artifactsRoot(), // S9：trace 落盘
   )
 
   // 注册节点：role/condition 用 mock handler；approval 用审批门
   for (const node of spec.nodes) {
     if (node.nodeType === 'approval') {
-      graph.addApprovalGate(node.id, { toolName: `weave_approve_${node.id}`, reason: `节点 ${node.id} 需审批` })
+      graph.addApprovalGate(node.id, {
+        toolName: `weave_approve_${node.id}`,
+        reason: `节点 ${node.id} 需审批`,
+        required: false,
+      })
     } else {
       const nodeId = node.id
       const role = node.roleRef ?? node.nodeType
-      graph.addNode(nodeId, async (state) => {
+      graph.addNode(nodeId, async () => {
         await new Promise((r) => setTimeout(r, MOCK_NODE_DELAY_MS))
-        const retryCount = ((state.retry_count as number | undefined) ?? 0) + 1
+        // M14 修复：retry_count 返回增量 1（merge 是累加策略），messages 追加
         return {
           messages: [{ role: 'mock', node: nodeId, at: Date.now() }],
-          retry_count: retryCount,
-          active_agent: role,
+          retry_count: 1,
         }
       })
+      void role
     }
   }
 
-  // 边：seq 走 addEdge；loop 走 addLoopEdge；cond 转条件函数（基于 when 表达式字符串用 evaluateCondition）
+  // 边：seq 走 addEdge；loop 走 addLoopEdge；cond 转条件函数
   for (const edge of spec.edges) {
     if (edge.type === 'seq') {
       graph.addEdge(edge.from, edge.to)
     } else if (edge.type === 'loop' && edge.maxIter !== undefined) {
       graph.addLoopEdge(edge.from, edge.to, edge.maxIter)
     } else if (edge.type === 'cond' && edge.when) {
-      // cond 边：经 evaluateCondition 求值（从声明式 when 构建条件函数）
+      // WIN3/L12 修复：静态 import evaluateCondition
       const when = edge.when
       const to = edge.to
       graph.addConditionalEdge(edge.from, async (state) => {
-        // 轻量求值：state.x 替换后 Function 求值（与 condition-edge.ts 白名单一致）
-        const { evaluateCondition } = await import('../l2-engine/condition-edge.js')
-        return evaluateCondition(when, state as Record<string, unknown>) ? to : '__END__'
+        return evaluateCondition(when, state as Record<string, unknown>) ? to : END
       })
     }
   }
 
-  // 事件桥接：引擎 emit 的 graph/* 事件 → 总线
-  const checkpoint = async (payload: { graphId: string; graphVersion: string; graphSchemaHash: string; node: string; state: Record<string, unknown>; iteration: number; timestamp: number }) => {
+  // 事件桥接：引擎 emit 的 graph/* 事件 → 总线（node-end 由引擎 S13 携带数据）
+  const checkpoint = async (payload: {
+    graphId: string
+    graphVersion: string
+    graphSchemaHash: string
+    node: string
+    state: Record<string, unknown>
+    iteration: number
+    timestamp: number
+  }) => {
     bus.handle({
       type: 'graph/checkpoint-written',
       graphId: payload.graphId,
@@ -90,20 +113,16 @@ export async function runGraphMock(ctx: Context, spec: GraphDefinitionSpec, bus:
       timestamp: payload.timestamp,
       data: { iteration: payload.iteration, graphVersion: payload.graphVersion },
     })
-    const tokens = Math.floor(Math.random() * 500) + 200
-    bus.handle({
-      type: 'graph/node-end',
-      graphId: payload.graphId,
-      node: payload.node,
-      timestamp: payload.timestamp,
-      durationMs: MOCK_NODE_DELAY_MS,
-      data: { tokenUsed: tokens, retryCount: ((payload.state.retry_count as number | undefined) ?? 0) },
-    })
   }
 
-  const result = await graph.run({ messages: [], retry_count: 0, max_iterations: spec.maxIterations ?? 25 } as Record<string, unknown>, {
-    checkpoint,
-  })
+  const result = await graph.run(
+    { messages: [], retry_count: 0, max_iterations: spec.maxIterations ?? 25 } as Record<string, unknown>,
+    {
+      checkpoint,
+      graphVersion: spec.graphVersion,
+      graphSchemaHash: spec.graphSchemaHash ?? computeGraphSchemaHash(spec),
+    },
+  )
 
   lastSnapshot = bus.getSnapshot()
   return { ok: result.success, message: result.error?.message ?? '图执行成功', graphId: result.graphId }

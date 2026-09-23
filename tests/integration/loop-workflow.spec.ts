@@ -1,4 +1,4 @@
-/**
+﻿/**
  * loop-workflow 集成测试（MVP-2 T19 Exit Gate：6 断言）。
  *
  * 用 mock 节点验证完整循环工作流：develop → test → quality →
@@ -46,7 +46,7 @@ function buildLoopGraph(ctx: Context, maxIterations = 25) {
   const graph = createStateGraph<LoopState>(ctx, maxIterations, 8)
   for (const node of spec.nodes) {
     if (node.nodeType === 'approval') {
-      graph.addApprovalGate(node.id, { toolName: 'weave_approve', reason: '门' })
+      graph.addApprovalGate(node.id, { toolName: 'weave_approve', reason: '门', required: false })
     } else if (node.id === 'quality') {
       // quality 递增 retry_count（可合并字段）；retry 到 3 → cond 边升级 approval
       graph.addNode(node.id, async (state) => ({
@@ -82,7 +82,7 @@ describe('T19 含循环端到端测试', () => {
     const checkpoint = vi.fn(async () => {})
     const result = await graph.run(
       { messages: [], retry_count: 0 },
-      { checkpoint },
+      { checkpoint, graphVersion: '0.1.0', graphSchemaHash: 'hash' },
     )
     expect(result.success).toBe(true)
     // 执行轨迹包含 develop/test/quality/approval
@@ -96,7 +96,7 @@ describe('T19 含循环端到端测试', () => {
     const { graph } = buildLoopGraph(ctx)
     const result = await graph.run(
       { messages: [], retry_count: 0 },
-      { checkpoint: async () => {} },
+      { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' },
     )
     // quality → develop 回退由 loop 边控制；develop 出现 2 次以上即证明回退
     const developEnds = result.trajectory.filter((e) => e.type === 'graph/node-end' && e.node === 'develop')
@@ -112,7 +112,7 @@ describe('T19 含循环端到端测试', () => {
     const { graph } = buildLoopGraph(ctx)
     const result = await graph.run(
       { messages: [], retry_count: 0 },
-      { checkpoint: async () => {} },
+      { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' },
     )
     expect(result.finalState.retry_count).toBe(3)
     expect(result.trajectory.some((e) => e.type === 'graph/node-end' && e.node === 'approval')).toBe(true)
@@ -124,7 +124,7 @@ describe('T19 含循环端到端测试', () => {
     const checkpoint = vi.fn(async () => {})
     await graph.run(
       { messages: [], retry_count: 0 },
-      { checkpoint },
+      { checkpoint, graphVersion: '0.1.0', graphSchemaHash: 'hash' },
     )
     // develop/test/quality 至少各一次 + approval 一次
     expect(checkpoint.mock.calls.length).toBeGreaterThanOrEqual(4)
@@ -135,7 +135,7 @@ describe('T19 含循环端到端测试', () => {
     const { graph } = buildLoopGraph(ctx)
     const result = await graph.run(
       { messages: [], retry_count: 0 },
-      { checkpoint: async () => {} },
+      { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' },
     )
     const types = new Set(result.trajectory.map((e) => e.type))
     expect(types.has('graph/start')).toBe(true)

@@ -8,8 +8,9 @@
  */
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
-import { createStateGraph, type StateGraph } from './state-graph.js'
+import { createStateGraph, END, type StateGraph } from './state-graph.js'
 import { computeGraphSchemaHash, GraphValidationError, parseGraphDefinition } from './graph-definition.js'
+import { evaluateCondition } from './condition-edge.js'
 import { validateGraph } from './static-validator.js'
 import type { GraphDefinitionSpec } from './types.js'
 
@@ -75,21 +76,47 @@ export class GraphEngineService extends Service {
         // 条件节点：由 edges 的 when 表达式驱动（声明式），此处注册空 handler
         graph.addNode(node.id, async () => ({}) as Partial<T>)
       } else if (node.nodeType === 'approval') {
-        graph.addApprovalGate(node.id, { toolName: `weave_approve_${node.id}`, reason: `节点 ${node.id} 需审批` })
+        // S8：从 YAML 加载的审批门默认 required:false（CLI/测试场景无 approval 服务时跳过；
+        // 需要强制的场景由显式 addApprovalGate 调用方控制 required:true）
+        graph.addApprovalGate(node.id, {
+          toolName: `weave_approve_${node.id}`,
+          reason: `节点 ${node.id} 需审批`,
+          required: false,
+        })
       }
     }
 
-    // 边：seq 走 addEdge；loop 走 addLoopEdge（含 maxIter）
+    // 边：seq 走 addEdge；loop 走 addLoopEdge（含 maxIter）；cond 合成条件函数（S7 修复）
+    const condEdgesByFrom = new Map<string, Array<{ when: string; to: string; maxIter?: number }>>()
     for (const edge of parsed.edges) {
       if (edge.type === 'seq') {
         graph.addEdge(edge.from, edge.to)
       } else if (edge.type === 'loop' && edge.maxIter !== undefined) {
         graph.addLoopEdge(edge.from, edge.to, edge.maxIter)
+      } else if (edge.type === 'cond' && edge.when !== undefined) {
+        const list = condEdgesByFrom.get(edge.from) ?? []
+        const entry: { when: string; to: string; maxIter?: number } = { when: edge.when, to: edge.to }
+        if (edge.maxIter !== undefined) entry.maxIter = edge.maxIter
+        list.push(entry)
+        condEdgesByFrom.set(edge.from, list)
       }
-      // cond 边：MVP-2 由 CLI/引擎层通过 evaluateCondition + resolveNextNode 处理，
-      // 声明式 edges 已在 fromDefinition 内按 type 传入——这里 seq/loop 已覆盖。
-      // cond 边依赖 when 表达式，需引擎侧声明式支持（见 state-graph InternalEdge）。
-      // 当前 MVP-2 引擎用条件函数路由，cond 表达式转函数由更高层（workflow 运行器）完成。
+    }
+
+    // S7：同一 from 的所有 cond 边合成一个 ConditionHandler（按声明顺序求值）
+    for (const [from, condEdges] of condEdgesByFrom) {
+      const maxIter = Math.max(...condEdges.map((e) => e.maxIter ?? 1))
+      graph.addConditionalEdge(
+        from,
+        async (state) => {
+          for (const edge of condEdges) {
+            if (evaluateCondition(edge.when, state as Record<string, unknown>)) {
+              return edge.to
+            }
+          }
+          return END // 都不满足 → 终止
+        },
+        maxIter,
+      )
     }
 
     return graph

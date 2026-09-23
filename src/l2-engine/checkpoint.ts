@@ -15,9 +15,10 @@
  * - 存储句柄由调用方 ctx.effect() 管理（RES.4 检查清单第 2 项）
  */
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { CheckpointCallback, CheckpointPayload } from './types.js'
 
-/** checkpoint 记录（落盘 7 字段）。 */
+/** checkpoint 记录（落盘 7 字段 + loopUsage）。 */
 export interface CheckpointRecord {
   graphId: string
   graphVersion: string
@@ -27,6 +28,8 @@ export interface CheckpointRecord {
   state: string
   iteration: number
   timestamp: number
+  /** 引擎内部状态：loop 边已回退次数（S4 恢复支持）。 */
+  loopUsage?: Record<string, number>
 }
 
 /** checkpoint 存储抽象（可注入；默认 fs 实现）。 */
@@ -51,7 +54,8 @@ export class FsCheckpointStore implements CheckpointStore {
   constructor(private readonly root: string) {}
 
   dir(graphId: string): string {
-    return `${this.root}/checkpoints/${graphId}`
+    // WIN1 修复：path.join 跨平台安全（Windows 用 \）
+    return join(this.root, 'checkpoints', graphId)
   }
 
   list(graphId: string): string[] {
@@ -72,7 +76,8 @@ export class FsCheckpointStore implements CheckpointStore {
   }
 
   write(fullPath: string, record: CheckpointRecord): Promise<void> {
-    const dir = fullPath.slice(0, fullPath.lastIndexOf('/'))
+    // WIN1 修复：path.dirname 替代 lastIndexOf('/')
+    const dir = dirname(fullPath)
     mkdirSync(dir, { recursive: true })
     writeFileSync(fullPath, JSON.stringify(record), 'utf8')
     return Promise.resolve()
@@ -102,7 +107,7 @@ export function createCheckpointCallback<T>(
     }
     try {
       const file = `${store.dir(graphId)}/${payload.iteration}-${payload.node}.json`
-      await store.write(file, {
+      const record: CheckpointRecord = {
         graphId,
         graphVersion,
         graphSchemaHash,
@@ -110,7 +115,10 @@ export function createCheckpointCallback<T>(
         state: serialized,
         iteration: payload.iteration,
         timestamp: payload.timestamp,
-      })
+      }
+      // S4：loopUsage 随 checkpoint 落盘（引擎内部状态恢复）
+      if (payload.loopUsage !== undefined) record.loopUsage = payload.loopUsage
+      await store.write(file, record)
     } catch (error) {
       logger?.error('checkpoint', 'checkpoint 写入失败', error as Error, {
         graphId,
@@ -143,7 +151,7 @@ export async function restoreFromLatestCheckpoint<T>(
   graphId: string,
   currentGraphVersion: string,
 ): Promise<
-  | { state: T; iteration: number; node: string }
+  | { state: T; iteration: number; node: string; loopUsage?: Record<string, number> }
   | VersionMismatch
   | null
 > {
@@ -180,5 +188,10 @@ export async function restoreFromLatestCheckpoint<T>(
       `checkpoint 恢复失败: ${graphId}/${latest} state 反序列化错误: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
-  return { state, iteration: record.iteration, node: record.node }
+  return {
+    state,
+    iteration: record.iteration,
+    node: record.node,
+    ...(record.loopUsage !== undefined ? { loopUsage: record.loopUsage } : {}),
+  }
 }

@@ -74,7 +74,8 @@ export const GraphDefinitionSpecSchema = z
     graphVersion: z.string().min(1),
     graphSchemaHash: z.string().min(1),
     entryPoint: z.string().min(1),
-    maxIterations: z.number().int().min(1).optional(),
+    // M8 修复：maxIterations 有上限（防误配爆炸）
+    maxIterations: z.number().int().min(1).max(1000).optional(),
     nodes: z.array(GraphNodeSpecSchema).min(1),
     edges: z.array(GraphEdgeSpecSchema),
     checkpoint: CheckpointSpecSchema,

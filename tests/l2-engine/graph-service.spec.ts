@@ -1,4 +1,4 @@
-/**
+﻿/**
  * graph-service.ts 单测（MVP-2 T10 Exit Gate：3 用例全绿）。
  *
  * 覆盖：Service 子类 + ctx.graph 可访问 / create() 返回 StateGraph /
@@ -45,7 +45,7 @@ describe('T10 ctx.graph 服务', () => {
     const ctx = await mounted()
     const graph = ctx.graph.create<{ messages: string[] }>()
     graph.addNode('a', async () => ({ messages: ['a'] }))
-    const result = await graph.run({ messages: [] }, { checkpoint: async () => {} })
+    const result = await graph.run({ messages: [] }, { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' })
     expect(result.success).toBe(true)
     expect(result.finalState.messages).toEqual(['a'])
   })
@@ -61,7 +61,7 @@ describe('T10 ctx.graph 服务', () => {
       ],
       edges: [{ from: 'dev', to: 'test', type: 'seq' }],
     })
-    const result = await graph.run({ messages: [] }, { checkpoint: async () => {} })
+    const result = await graph.run({ messages: [] }, { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' })
     expect(result.success).toBe(true)
 
     const hash = ctx.graph.schemaHash(validSpec)

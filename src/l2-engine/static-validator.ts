@@ -48,8 +48,14 @@ export function validateGraph(spec: GraphDefinitionSpec, ctx: ValidatorContext):
     }
   }
 
-  // ② cond 边的 when 引用字段必须在白名单
+  // ② cond 边的 when 引用字段必须在白名单；parallel 边 MVP-2 不支持（M11 修复）
   for (const edge of spec.edges) {
+    if (edge.type === 'parallel') {
+      errors.push({
+        path: `edges.${edge.from}->${edge.to}`,
+        message: 'parallel 边 MVP-2 不支持（并行分支留待 MVP-3）',
+      })
+    }
     if (edge.type === 'cond' && edge.when) {
       for (const field of extractFields(edge.when)) {
         if (!STATE_FIELDS.has(field)) {

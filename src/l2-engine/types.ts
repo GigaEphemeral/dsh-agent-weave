@@ -54,6 +54,10 @@ export interface GraphNodeContext<T> {
   iteration: number
   /** 审批上下文（审批门节点需要；经 run options 注入）。 */
   agent?: Agent
+  /** 节点执行时上报 token 用量（引擎汇总到 node-end 事件，S13 修复）。 */
+  reportTokenUsage?(usage: { input: number; output: number; cacheRead?: number }): void
+  /** 节点执行时上报 retry 计数（用于可视化，S13 修复）。 */
+  reportRetry?(count: number): void
 }
 
 /**
@@ -91,11 +95,15 @@ export interface GraphExecutionResult<T> {
   error?: Error
 }
 
-/** 运行选项（checkpoint 必需 + agent + 中止信号）。 */
+/** 运行选项（checkpoint 必需 + graphVersion + agent + 中止信号）。 */
 export interface RunOptions<T> {
   /** checkpoint 回调（必需，RES.10 §一.4）。 */
   checkpoint: CheckpointCallback<T>
-  /** 审批上下文（审批门需要；MVP-2 经 CLI 注入 mock 或真实 agent）。 */
+  /** 图 DSL 语义版本（必需，S1 修复：版本感知恢复真实生效）。 */
+  graphVersion: string
+  /** DSL schema 内容哈希（必需，S1 修复）。 */
+  graphSchemaHash: string
+  /** 审批上下文（审批门需要；经 CLI 注入 mock 或真实 agent）。 */
   agent?: Agent
   /** 中止信号。 */
   signal?: AbortSignal
@@ -114,6 +122,8 @@ export interface CheckpointPayload<T> {
   state: T
   iteration: number
   timestamp: number
+  /** 引擎内部状态：loop 边已回退次数（S4 修复：恢复后不归零）。 */
+  loopUsage?: Record<string, number>
 }
 
 /** checkpoint 回调：落盘/记录；不应抛错（吞掉记日志，fail-safe）。 */

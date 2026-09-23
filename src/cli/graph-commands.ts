@@ -64,20 +64,27 @@ export function renderAsciiGraph(spec: GraphDefinitionSpec): string {
   lines.push(`节点数: ${spec.nodes.length} | 边数: ${spec.edges.length} | 最大迭代: ${spec.maxIterations ?? 25}`)
   lines.push('')
 
-  // 主链：从 entryPoint 沿 seq 边线性走；cond/loop 边另行列示
+  // 主链：从 entryPoint 沿 seq 边线性走；cond/loop/分叉另行列示
   const visited = new Set<string>()
   const chain: string[] = []
+  const branchHints: string[] = []
   let current: string | undefined = spec.entryPoint
   while (current !== undefined && !visited.has(current)) {
     visited.add(current)
     chain.push(current)
     const seqs = outgoing.get(current)
-    const seq: GraphEdgeSpec | undefined = seqs?.find((e) => e.type === 'seq')
+    const seqEdges = seqs?.filter((e) => e.type === 'seq') ?? []
+    // M15 修复：多条 seq 出边时标注分叉提示（MVP-2 只取第一条）
+    if (seqEdges.length > 1) {
+      branchHints.push(`      ⑂ 分叉提示: ${current} 有多条 seq 出边（${seqEdges.map((e) => e.to).join(', ')}），MVP-2 只取第一条`)
+    }
+    const seq: GraphEdgeSpec | undefined = seqEdges[0]
     current = seq?.to
   }
 
   const chainLine = chain.map((id) => `[${id}]`).join('──→')
   lines.push(`  ${chainLine}`)
+  for (const hint of branchHints) lines.push(hint)
 
   // 分支与循环标注
   for (const edge of spec.edges) {

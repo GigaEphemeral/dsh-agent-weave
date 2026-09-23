@@ -41,8 +41,9 @@ export function createLoopDetector(): LoopDetector {
     const fresh: LoopAlert[] = []
     const now = Date.now()
 
-    // 全局迭代告警：iteration >= 80% maxIterations
-    if (snap.maxIterations > 0 && snap.iteration >= snap.maxIterations * WARN_RATIO && snap.iteration < snap.maxIterations) {
+    // 全局迭代告警：iteration >= ceil(80% maxIterations)（M13：整数比较防漏）
+    const globalWarnAt = Math.ceil(snap.maxIterations * WARN_RATIO)
+    if (snap.maxIterations > 0 && snap.iteration >= globalWarnAt && snap.iteration < snap.maxIterations) {
       const key = `global:${snap.iteration}`
       if (!emitted.has(key)) {
         emitted.add(key)
@@ -73,8 +74,9 @@ export function createLoopDetector(): LoopDetector {
       }
     }
 
-    // 边级循环告警：retry_count 达 maxRetry 的 80%
-    if (snap.maxRetry > 0 && snap.retryCount >= snap.maxRetry * WARN_RATIO && snap.retryCount < snap.maxRetry) {
+    // 边级循环告警：retry_count 达 ceil(80% maxRetry)（M13 修复）
+    const edgeWarnAt = Math.ceil(snap.maxRetry * WARN_RATIO)
+    if (snap.maxRetry > 0 && snap.retryCount >= edgeWarnAt && snap.retryCount < snap.maxRetry) {
       const key = `edge:${snap.retryCount}`
       if (!emitted.has(key)) {
         emitted.add(key)

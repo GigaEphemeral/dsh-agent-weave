@@ -1,4 +1,4 @@
-/**
+﻿/**
  * state-graph.ts 集成测试（MVP-2 T9 Exit Gate：8 断言）。
  *
  * 覆盖：addNode/addEdge/addConditionalEdge/addApprovalGate 可用、
@@ -43,7 +43,7 @@ describe('T9 StateGraph 引擎骨架', () => {
     const g = buildLinear(ctx)
     const result = await g.run(
       { messages: [], retry_count: 0, phase: 'start' },
-      { checkpoint: async () => {} },
+      { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' },
     )
     expect(result.success).toBe(true)
     expect(result.finalState.messages).toEqual(['a', 'b', 'c'])
@@ -53,7 +53,7 @@ describe('T9 StateGraph 引擎骨架', () => {
   it('轨迹事件包含核心 5 种（start/node-start/node-end/checkpoint/end）', async () => {
     const ctx = new Context()
     const g = buildLinear(ctx)
-    const result = await g.run({ messages: [], retry_count: 0, phase: 'start' }, { checkpoint: async () => {} })
+    const result = await g.run({ messages: [], retry_count: 0, phase: 'start' }, { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' })
     const types = result.trajectory.map((e) => e.type)
     expect(types).toContain('graph/start')
     expect(types).toContain('graph/node-start')
@@ -69,7 +69,7 @@ describe('T9 StateGraph 引擎骨架', () => {
     const g = createStateGraph<DemoState>(ctx, 2, 8)
     g.addNode('loop', async (s) => ({ retry_count: ((s.retry_count ?? 0) as number) + 1 }))
     g.addEdge('loop', 'loop')
-    const result = await g.run({ messages: [], retry_count: 0, phase: '' }, { checkpoint: async () => {} })
+    const result = await g.run({ messages: [], retry_count: 0, phase: '' }, { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' })
     expect(result.success).toBe(false)
     expect(result.error?.message).toContain('迭代次数超过上限')
     expect(result.trajectory.some((e) => e.type === 'graph/error')).toBe(true)
@@ -81,7 +81,7 @@ describe('T9 StateGraph 引擎骨架', () => {
     g.addNode('a', async () => ({ phase: 'a' }))
     g.addNode('b', async () => ({ phase: 'b' })) // 冲突：phase 已有值且不同
     g.addEdge('a', 'b')
-    const result = await g.run({ messages: [], retry_count: 0, phase: 'initial' }, { checkpoint: async () => {} })
+    const result = await g.run({ messages: [], retry_count: 0, phase: 'initial' }, { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' })
     expect(result.success).toBe(false)
     expect(result.error?.message).toContain('状态合并冲突')
   })
@@ -92,7 +92,7 @@ describe('T9 StateGraph 引擎骨架', () => {
     g.addNode('a', async () => ({ messages: ['a'] }))
     g.addNode('b', async () => ({ messages: ['b'] }))
     g.addEdge('a', 'b')
-    const result = await g.run({ messages: [], retry_count: 0, phase: 'start' }, { checkpoint: async () => {} })
+    const result = await g.run({ messages: [], retry_count: 0, phase: 'start' }, { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' })
     // limit=1 串行执行不应被拒绝（release 在 finally）
     expect(result.success).toBe(true)
   })
@@ -110,7 +110,7 @@ describe('T9 StateGraph 引擎骨架', () => {
     g.addEdge('work', 'quality')
     // quality 后条件路由：retry < 2 回 work，否则 __END__
     g.addConditionalEdge('quality', async (s) => (((s.retry_count ?? 0) as number) < 2 ? 'work' : END))
-    const result = await g.run({ messages: [], retry_count: 0, phase: '' }, { checkpoint: async () => {} })
+    const result = await g.run({ messages: [], retry_count: 0, phase: '' }, { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' })
     expect(result.success).toBe(true)
     // 执行序列：work→quality→work→quality→work→quality → retry=3 ≥2 → END
     expect(result.finalState.messages).toContain('quality')
@@ -122,9 +122,9 @@ describe('T9 StateGraph 引擎骨架', () => {
     const ctx = new Context()
     const g = createStateGraph<DemoState>(ctx)
     g.addNode('a', async () => ({ messages: ['a'] }))
-    g.addApprovalGate('gate', { toolName: 'weave_approve', reason: '测试门' })
+    g.addApprovalGate('gate', { toolName: 'weave_approve', reason: '测试门', required: false })
     g.addEdge('a', 'gate')
-    const result = await g.run({ messages: [], retry_count: 0, phase: 'start' }, { checkpoint: async () => {} })
+    const result = await g.run({ messages: [], retry_count: 0, phase: 'start' }, { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'hash' })
     expect(result.success).toBe(true)
   })
 
@@ -132,7 +132,7 @@ describe('T9 StateGraph 引擎骨架', () => {
     const ctx = new Context()
     const g = buildLinear(ctx)
     const checkpoint = vi.fn(async () => {})
-    await g.run({ messages: [], retry_count: 0, phase: 'start' }, { checkpoint })
+    await g.run({ messages: [], retry_count: 0, phase: 'start' }, { checkpoint, graphVersion: '0.1.0', graphSchemaHash: 'hash' })
     expect(checkpoint).toHaveBeenCalledTimes(3)
     expect(checkpoint.mock.calls[0]?.[0].node).toBe('a')
     expect(checkpoint.mock.calls[0]?.[0].state.messages).toEqual(['a'])
