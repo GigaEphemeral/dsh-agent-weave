@@ -26,6 +26,7 @@ import { resolveArtifactsRoot } from './artifacts-root.js'
 import { listRuns, listCheckpoints } from './run-history.js'
 import { readNodeActivity } from './activity-reader.js'
 import { pauseGraph, resumeGraph, stopGraph } from './graph-control.js'
+import { controlActiveGraph } from '../../l2-engine/graph-control.js'
 
 type Req = { method?: string; url?: string; headers?: Record<string, string | string[] | undefined>; on?: (ev: string, cb: () => void) => unknown }
 type Res = { writeHead(code: number, headers?: Record<string, string>): unknown; end(body?: string): unknown; write?(body: string): boolean }
@@ -181,10 +182,12 @@ export function registerVisualRoutes(
     }
 
     // POST /graph/:graphId/pause|resume|stop
+    // 问题四修复4：优先内存化图控制（即时响应）；同时写标志文件兼容 chain-runner
     if (tail.length === 1 && ['pause', 'resume', 'stop'].includes(tail[0] ?? '')) {
       if (method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
       const root = entry?.artifactsRoot ?? resolveArtifactsRoot({})
       const action = tail[0] as 'pause' | 'resume' | 'stop'
+      controlActiveGraph(action, graphId)
       if (action === 'pause') void pauseGraph(graphId, root)
       else if (action === 'resume') void resumeGraph(graphId, root)
       else void stopGraph(graphId, root)

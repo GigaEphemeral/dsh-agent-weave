@@ -34,6 +34,8 @@ import type {
 import { mergeState } from './atomic-merge.js'
 import { createQueueingCounter } from './concurrency-counter.js'
 import { edgeKey, resolveNextNode } from './condition-edge.js'
+import { validateNodeOutput } from './node-validator.js'
+import { getGraphControl, clearGraphControl } from './graph-control.js'
 import type { RunLedger, LedgerEventType } from '../l5-observability/run-ledger.js'
 import type { TokenCollector } from '../l5-observability/token-collector.js'
 import { logger } from '../shared/logger.js'
@@ -179,6 +181,8 @@ export interface SubagentNodeOptions {
   artifactName?: string
   /** 节点 meta（NEW-10 currentRole 数据来源）。 */
   role?: string
+  /** 问题四：质量门（产物验证；空数组不验证）。 */
+  qualityGate?: readonly string[]
 }
 
 /** 引擎实例选项。 */
@@ -387,6 +391,26 @@ export function createStateGraph<T extends Record<string, unknown>>(
           writeFileSync(file, text, 'utf8')
           patch.artifacts = { [name]: file }
         }
+        // 问题四修复1+2：质量门验证（产物空/数量不足 → 抛错 → 节点失败 → 整图停，不再继续空跑）
+        if (options.qualityGate && options.qualityGate.length > 0) {
+          // 非空门语义：子代理实际输出文本非空（避免"产物文件写了但 0 行"的假通过）
+          const gateFailures: string[] = []
+          for (const gate of options.qualityGate) {
+            if (gate.includes('非空') && text.length === 0) {
+              gateFailures.push(`质量门未过: ${gate}（子代理产出为空）`)
+            }
+          }
+          const validation = validateNodeOutput(patch, options.qualityGate)
+          for (const f of validation.failures) gateFailures.push(f)
+          if (gateFailures.length > 0) {
+            const err = new Error(`质量门未过（节点 ${name}）: ${gateFailures.join('; ')}`)
+            logger.warn('weave-addsubagent', '质量门未过，节点失败（整图终止）', {
+              node: name,
+              failures: gateFailures,
+            })
+            throw err
+          }
+        }
         return patch as Partial<T>
       })
       if (options.role !== undefined) nodeMetas.set(name, { role: options.role })
@@ -490,6 +514,22 @@ export function createStateGraph<T extends Record<string, unknown>>(
         : new Map<string, number>()
 
       while (current !== END) {
+        // 问题四修复3：内存化图控制（stop/pause 优先于文件轮询，响应即时）
+        const ctrl = getGraphControl(graphId)
+        if (ctrl.isStopped()) {
+          emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { stopped: true } })
+          return { graphId, success: true, finalState: state, trajectory, iterations: iteration, data: { stopped: true } }
+        }
+        if (ctrl.isPaused()) {
+          emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { status: 'paused', pausedAt: Date.now() } })
+          await ctrl.waitForResume()
+          if (ctrl.isStopped()) {
+            emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { stopped: true } })
+            return { graphId, success: true, finalState: state, trajectory, iterations: iteration, data: { stopped: true } }
+          }
+          emit({ type: 'graph/checkpoint-written', graphId, node: current, timestamp: Date.now(), data: { resumed: true } })
+        }
+
         // P4.D.1：节点边界 STOP 检查（先于迭代计数——STOP 应立即可终止）
         if (artifactsRoot && existsSync(join(artifactsRoot, 'STOP'))) {
           emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { stopped: true } })
@@ -737,6 +777,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
       }
 
       emit({ type: 'graph/end', graphId, timestamp: Date.now() })
+      // 问题四修复3：运行结束释放内存控制状态
+      clearGraphControl(graphId)
       return { graphId, success: true, finalState: state, trajectory, iterations: iteration }
     },
   }

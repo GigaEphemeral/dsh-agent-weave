@@ -5,7 +5,8 @@
  * condition 节点 pass-through / approval 门 → seq/loop/cond 边 → graph.run。
  * 返回执行结果 + trace 路径 + 产物目录。
  */
-import { join } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { loadGraphSpec, resolveExecWorkspace } from './graph-commands.js'
@@ -18,7 +19,16 @@ import { resolveArtifactsRoot } from '../l4-visual/host/artifacts-root.js'
 import { registerGraph } from '../l4-visual/host/spec-registry.js'
 import { getGlobalTokens } from '../l4-visual/host/visual-runtime.js'
 import { createRunLedger, type RunLedger } from '../l5-observability/run-ledger.js'
+import { loadRoleDefinitions } from '../l3-roles/role-loader.js'
 import type { GraphDefinitionSpec } from '../l2-engine/types.js'
+
+/** 插件包根目录（基于编译产物 lib 定位）。 */
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
+/** 角色目录（插件包内 roles/；测试/部署可用绝对路径覆盖）。 */
+function resolveRolesDir(_ctx: Context): string {
+  return join(PACKAGE_ROOT, 'roles')
+}
 
 /** 全局 RunLedger（消息流桥接 + 审计；惰性创建）。 */
 let globalLedger: RunLedger | null = null
@@ -64,14 +74,18 @@ export async function runGraphRealTool(
   registerGraph(graphId, { spec, roleMap, artifactsRoot: root })
 
   // 节点：role → addSubagent；condition/approval → pass-through/门
+  // 问题四：从角色 YAML 的 quality_gate 接入节点产物验证（产物空 → 整图停）
+  const roles = loadRoleDefinitions(resolveRolesDir(ctx))
   for (const node of spec.nodes) {
     if (node.nodeType === 'role' && node.roleRef) {
+      const role = roles.find((r) => r.id === node.roleRef)
       graph.addSubagent(node.id, {
         provider: node.roleRef,
         // P4.0.6：artifactName 支持（缺省 <nodeId>.md）
         artifactName: node.artifactName ?? `${node.id}.md`,
         role: node.roleRef,
         ...(node.promptTemplate !== undefined ? { promptTemplate: node.promptTemplate } : {}),
+        ...(role && role.quality_gate.length > 0 ? { qualityGate: role.quality_gate } : {}),
       })
     } else if (node.nodeType === 'approval') {
       graph.addApprovalGate(node.id, {
