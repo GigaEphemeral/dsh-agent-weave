@@ -19,7 +19,7 @@
  * - S11：无出边发 warning 级 graph/error 事件（不改变成功语义）
  * - S13：node-end 事件携带 inputTokens/outputTokens/cacheReadTokens/tokenUsed/retryCount
  */
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
@@ -60,6 +60,8 @@ export interface ApprovalGateOptions {
 export interface StateGraph<T> {
   /** NEW-10：addNode 支持 meta（role 数据来源，供 node-start 事件）。 */
   addNode(name: string, handler: NodeHandler<T>, meta?: NodeMeta): this
+  /** P3.A.1：添加真实子代理节点（role 节点接 ctx.subagents.start，产物落盘）。 */
+  addSubagent(name: string, options: SubagentNodeOptions): this
   addEdge(from: string, to: string): this
   /** 声明式循环边：`from → to` 最多回退 maxIter 次，用尽后走审批/终止。 */
   addLoopEdge(from: string, to: string, maxIter: number): this
@@ -87,9 +89,15 @@ interface InternalConditionalEdge {
 }
 
 export interface SubagentNodeOptions {
+  /** 角色 provider 名（= 角色 YAML id，如 R6-developer）。 */
   provider: string
+  /** prompt 模板：可含 {{user_input}} / {{upstream}} / {{state}} 占位。 */
   promptTemplate?: string
   outputSchema?: unknown
+  /** 产物落盘目录（相对 artifactsRoot/<graphId>/<node>/）；缺省不落盘。 */
+  artifactName?: string
+  /** 节点 meta（NEW-10 currentRole 数据来源）。 */
+  role?: string
 }
 
 /** 引擎实例选项。 */
@@ -152,6 +160,48 @@ export function createStateGraph<T extends Record<string, unknown>>(
         // 审批门可无 handler：纯门，空增量
         nodes.set(name, async () => ({}) as Partial<T>)
       }
+      return this
+    },
+
+    // P3.A.1：真实子代理节点（role 节点接 ctx.subagents.start）
+    addSubagent(name, options) {
+      if (name === END || name === SKIP) throw new Error(`${name} 是保留哨兵`)
+      if (nodes.has(name)) throw new Error(`节点已存在: ${name}`)
+      nodes.set(name, async (state, nodeCtx, signal) => {
+        const agent = nodeCtx.agent
+        if (!agent) throw new Error(`子代理节点 "${name}" 需要 RunOptions.agent（真实 Agent 作 parent）`)
+        const upstreamArtifacts = state.artifacts as Record<string, string> | undefined
+        const upstreamSummary = upstreamArtifacts
+          ? Object.entries(upstreamArtifacts).map(([n, p]) => `[${n}] ${p}`).join('\n')
+          : '（无上游产物）'
+        const prompt = (options.promptTemplate ?? '以 {{provider}} 角色完成任务：\n{{user_input}}\n\n上游产物：\n{{upstream}}')
+          .replaceAll('{{provider}}', options.provider)
+          .replaceAll('{{user_input}}', String((state.user_input as string | undefined) ?? ''))
+          .replaceAll('{{upstream}}', upstreamSummary)
+        const run = await nodeCtx.ctx.subagents.start(options.provider, {
+          prompt: [{ type: 'text', text: prompt }],
+          parent: agent as never,
+          signal: signal ?? new AbortController().signal, // P3.A.3：中断信号贯通
+          label: `${name}（${options.provider}）`,
+        })
+        const result = await run.result
+        const text = result.output.map((b) => (b.type === 'text' ? b.text : '')).join('\n').trim()
+
+        // 产物落盘（artifactsRoot 传入且配置 artifactName 时）
+        const patch: Record<string, unknown> = {
+          messages: [{ role: options.provider, node: name, at: Date.now(), stopReason: result.stopReason }],
+        }
+        if (options.artifactName && artifactsRoot) {
+          const nodeDir = join(artifactsRoot, 'graph-artifacts', name)
+          mkdirSync(nodeDir, { recursive: true })
+          const file = join(nodeDir, options.artifactName)
+          writeFileSync(file, text, 'utf8')
+          patch.artifacts = { [name]: file }
+        }
+        return patch as Partial<T>
+      })
+      if (options.role !== undefined) nodeMetas.set(name, { role: options.role })
+      if (!entryPoint) entryPoint = name
       return this
     },
 
