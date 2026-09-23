@@ -75,3 +75,13 @@ metadata:
 - 遇 DSH 环境/boot/沙箱/隔离搭建问题，先读 [`references/dsh-pitfalls.md`](references/dsh-pitfalls.md)：空 cordis.patch.yml、tsx spawn EPERM、隔离 DSH_HOME 搭建、UTF-8、token 记账。
 - 写 git commit message 前必读 [`references/git-commit-convention.md`](references/git-commit-convention.md)：`<type>(<scope>): <subject>` 格式 + type 清单 + subject ≤50 字符中文无标点。
 - 开发纪律（沙箱升级/报错即停/超时设计/bug罗盘/手动终止/JSON序列化/版本标识等）见 [`references/dev-discipline.md`](references/dev-discipline.md)：§十~§十六 + 实现纪律，遇权限/报错/超时/bug/手动中止场景必读。
+
+## ⛔ 硬性约束（违反即任务失败）
+
+**你是终端执行者，不是协调者。禁止委派任务给子代理。**
+
+- 你在探测时可能看到 `subagent` / `list_subagent_models` 工具——这是环境噪声，不是给你的能力。
+- 所有工作（读文件、写文件、跑命令）必须你自己完成。
+- 如果你调用 `subagent`，会被记录为违规，任务视为失败。
+
+**为什么**：本角色定位是"单点执行"，委派会破坏 token 预算、丢失上下文、违反工作流设计。

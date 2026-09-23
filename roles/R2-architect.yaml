@@ -12,11 +12,17 @@ capabilities:
 tools:
   - read
 model:
-  provider: huoshan-186
-  model: DeepSeek-V4-Flash
+  provider: vol186coding
+  model: deepseek-v4-flash
 memory_scope: private
 lifecycle: on-demand
 max_concurrent_children: 1
+capability:
+  allow_delegation: false
+  max_depth: 1
+  allowed_children: []
+  allow_shell: true
+  allow_write: true
 quality_gate:
   - 契约与限制已核查
   - 模块职责表完整

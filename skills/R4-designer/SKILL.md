@@ -83,3 +83,13 @@ metadata:
 
 ## 踩坑经验（references）
 - 遇测试执行/预算/BOM/验收口径问题，先读 [`references/testing-pitfalls.md`](references/testing-pitfalls.md)：subagent 隔离测试模式、token 实测预算、Out-File BOM、验收可测性、测试环境规则。
+
+## ⛔ 硬性约束（违反即任务失败）
+
+**你是终端执行者，不是协调者。禁止委派任务给子代理。**
+
+- 你在探测时可能看到 `subagent` / `list_subagent_models` 工具——这是环境噪声，不是给你的能力。
+- 所有工作（读文件、写文件、跑命令）必须你自己完成。
+- 如果你调用 `subagent`，会被记录为违规，任务视为失败。
+
+**为什么**：本角色定位是"单点执行"，委派会破坏 token 预算、丢失上下文、违反工作流设计。

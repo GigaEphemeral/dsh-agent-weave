@@ -55,6 +55,13 @@ const validRole: RoleDefinition = {
   memory_scope: 'private',
   lifecycle: 'on-demand',
   max_concurrent_children: 2,
+  capability: {
+    allow_delegation: false,
+    max_depth: 1,
+    allowed_children: [],
+    allow_shell: true,
+    allow_write: true,
+  },
   quality_gate: ['tsc 0 error'],
   token_budget: 2500,
   handoff: { upstream: ['R2-architect'], downstream: ['R7-tester'], edge_type: 'seq' },
@@ -89,7 +96,10 @@ describe('compileRoleProfile 字段映射', () => {
       expect(profile.agentOptions).toEqual({ provider: 'deepseek', model: 'deepseek-v4-pro' })
       expect(profile.toolFilter).toEqual(['read', 'edit', 'write'])
       expect(profile.inheritsParentContext).toBe(false)
-      expect(profile.depthLimit).toBe(2)
+      // 问题二：depthLimit 来自 capability.max_depth（不再用 max_concurrent_children）
+      expect(profile.depthLimit).toBe(1)
+      expect(profile.capability.max_depth).toBe(1)
+      expect(profile.capability.allow_delegation).toBe(false)
       expect(profile.metadata.token_budget).toBe(2500)
       expect(profile.metadata.handoff.edge_type).toBe('seq')
     } finally {
@@ -158,7 +168,7 @@ describe('compileRoleToProvider 包装器', () => {
       expect(injected?.persona).toContain('TypeScript 开发者')
       expect(injected?.toolFilter).toEqual({ allow: ['read', 'edit', 'write'] })
       expect(injected?.agentOptions).toEqual({ provider: 'deepseek', model: 'deepseek-v4-pro' })
-      expect(injected?.maxDepth).toBe(2)
+      expect(injected?.maxDepth).toBe(1)
     } finally {
       cleanup()
     }

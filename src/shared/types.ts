@@ -30,6 +30,28 @@ export const ObserverConfigSchema = z.object({
   token_budget: z.number().int().positive(),
 })
 
+/** 角色委派能力（问题二：禁止子代理自动 spawn 下级）。 */
+export interface RoleCapability {
+  /** 是否允许 spawn 子代理（默认 false）。 */
+  allow_delegation: boolean
+  /** 允许的最大委派深度（角色自身深度 1 存在；2 = 允许 spawn 一级下级）。 */
+  max_depth: number
+  /** 允许 spawn 的角色白名单（空 = 不限制）。 */
+  allowed_children: string[]
+  /** 是否允许执行 shell。 */
+  allow_shell: boolean
+  /** 是否允许写文件。 */
+  allow_write: boolean
+}
+
+export const RoleCapabilitySchema = z.object({
+  allow_delegation: z.boolean().default(false),
+  max_depth: z.number().int().min(0).max(5).default(1),
+  allowed_children: z.array(z.string()).default([]),
+  allow_shell: z.boolean().default(true),
+  allow_write: z.boolean().default(true),
+})
+
 /** 角色定义（从 YAML 加载后经 Zod 校验）。 */
 export interface RoleDefinition {
   schema_version: string
@@ -48,6 +70,8 @@ export interface RoleDefinition {
   memory_scope: 'private' | 'shared'
   lifecycle: 'resident' | 'on-demand' | 'hybrid'
   max_concurrent_children: number
+  /** 问题二：委派能力（depthLimit 数据来源，替换 max_concurrent_children 误用）。 */
+  capability: RoleCapability
   quality_gate: string[]
   token_budget: number
   handoff: {
@@ -74,6 +98,13 @@ export const RoleDefinitionSchema = z.object({
   memory_scope: z.enum(['private', 'shared']),
   lifecycle: z.enum(['resident', 'on-demand', 'hybrid']),
   max_concurrent_children: z.number().int().positive(),
+  capability: RoleCapabilitySchema.default({
+    allow_delegation: false,
+    max_depth: 1,
+    allowed_children: [],
+    allow_shell: true,
+    allow_write: true,
+  }),
   quality_gate: z.array(z.string()),
   token_budget: z.number().int().positive(),
   handoff: z.object({
@@ -113,8 +144,10 @@ export interface RoleProfile {
     provider: string
     model: string
   }
-  /** 子代理最大并发数。 */
+  /** 子代理最大并发数（保留，仅元数据）。 */
   depthLimit?: number
+  /** 问题二：委派能力（maxDepth 数据来源）。 */
+  capability: RoleCapability
   /** G4 记忆纯洁性开关：private → false。 */
   inheritsParentContext: boolean
   /** 角色元数据（供日志/看板使用，不参与请求组装）。 */

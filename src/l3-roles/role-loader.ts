@@ -89,7 +89,9 @@ export function compileRoleProfile(role: RoleDefinition, options: CompileOptions
       provider: role.model.provider,
       model: role.model.model,
     },
-    ...(role.max_concurrent_children > 0 ? { depthLimit: role.max_concurrent_children } : {}),
+    // 问题二：depthLimit/maxDepth 从 capability.max_depth 读（修正 max_concurrent_children 语义错位）
+    depthLimit: role.capability.max_depth,
+    capability: role.capability,
     inheritsParentContext: role.memory_scope === 'shared',
     metadata: {
       name: role.name,
