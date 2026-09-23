@@ -1,7 +1,7 @@
 {
   "name": "dsh-agent-weave",
   "version": "0.2.0",
-  "description": "可视化 Agent 任务编排工具：多角色 subagent 协作编排（MVP-1 单链验证）",
+  "description": "可视化 Agent 任务编排工具：多角色 subagent 协作编排",
   "type": "module",
   "license": "MIT",
   "main": "lib/index.js",
@@ -28,13 +28,21 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "platform": "web"
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "external": [
+        "react",
+        "react/jsx-runtime"
+      ]
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown",
+    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
     "build:host": "tsc -p tsconfig.json",
-    "build:client": "tsc -p tsconfig.client.json && tsdown",
+    "build:client": "node scripts/build-client.mjs",
     "clean": "node -e \"const fs=require('node:fs');for(const p of ['lib','tsconfig.tsbuildinfo'])fs.rmSync(p,{recursive:true,force:true})\"",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "vitest run",
@@ -52,9 +60,9 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.0.0",
     "@types/react": "^18.3.0",
+    "esbuild": "^0.28.2",
     "js-yaml": "^4.1.0",
     "react": "^18.3.0",
-    "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8",
     "zod": "^4.4.3"

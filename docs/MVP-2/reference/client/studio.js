@@ -2362,7 +2362,7 @@ window.__ModuleLoader__.load({
       } catch (e) { /* 无宿主环境静默 */ }
     }
 
-    exports.inject = ["slots"];
+
 
     exports.apply = function (ctx) {
       hostCtx = ctx;

@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "dsh-agent-weave": "file:D:/dsharness/agentDev/softwareEngnieering/3pluginCode/dist/dsh-agent-weave-0.2.0.tgz"
+  }
+}
