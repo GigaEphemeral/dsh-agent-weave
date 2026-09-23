@@ -36,6 +36,23 @@ import { createQueueingCounter } from './concurrency-counter.js'
 import { edgeKey, resolveNextNode } from './condition-edge.js'
 import type { RunLedger, LedgerEventType } from '../l5-observability/run-ledger.js'
 import type { TokenCollector } from '../l5-observability/token-collector.js'
+import { logger } from '../shared/logger.js'
+
+/** 子代理 run 对象最小形态（问题 2 定位日志用；与 dsh-subagent SubagentRun 对齐）。 */
+interface SubagentRunLike {
+  id?: string
+  localAgent?: unknown
+  result: Promise<{ output: Array<{ type: string; text?: string }>; stopReason: string }>
+}
+
+/** 已注册 provider 名列表（安全读取，失败返回空——问题 2 定位日志用）。 */
+function safeProviderList(ctx: Context): string[] {
+  try {
+    return ctx.subagents.list()
+  } catch {
+    return []
+  }
+}
 
 /** 轨迹事件 → ledger 事件类型映射（P1-1）。 */
 function mapToLedgerType(type: TrajectoryEvent['type']): LedgerEventType {
@@ -218,16 +235,59 @@ export function createStateGraph<T extends Record<string, unknown>>(
           .replaceAll('{{provider}}', options.provider)
           .replaceAll('{{user_input}}', String((state.user_input as string | undefined) ?? ''))
           .replaceAll('{{upstream}}', upstreamSummary)
-        const run = await nodeCtx.ctx.subagents.start(options.provider, {
-          prompt: [{ type: 'text', text: prompt }],
-          parent: agent as never,
-          // P4.0.4：signal 契约必填——贯通外部 signal；无外部时新建真实 controller signal
-          //（绝不伪造共享/永不中止的假 signal，保证 STOP 实时传播）
-          signal: signal ?? new AbortController().signal,
-          label: `${name}（${options.provider}）`,
+        const startAt = Date.now()
+        // 问题 2 定位日志①：start 调用前（确认参数与 provider 解析路径）
+        logger.info('weave-addsubagent', 'start 调用前', {
+          node: name,
+          provider: options.provider,
+          hasAgent: Boolean(agent),
+          agentSession: agent?.sessionId ?? '',
+          graphId: nodeCtx.graphId,
+          iteration: nodeCtx.iteration,
+          signalAborted: signal?.aborted ?? false,
+          registeredProviders: safeProviderList(nodeCtx.ctx),
+          promptLen: prompt.length,
+        })
+        let run: SubagentRunLike
+        try {
+          run = await nodeCtx.ctx.subagents.start(options.provider, {
+            prompt: [{ type: 'text', text: prompt }],
+            parent: agent as never,
+            // P4.0.4：signal 契约必填——贯通外部 signal；无外部时新建真实 controller signal
+            //（绝不伪造共享/永不中止的假 signal，保证 STOP 实时传播）
+            signal: signal ?? new AbortController().signal,
+            label: `${name}（${options.provider}）`,
+          })
+        } catch (error) {
+          // 问题 2 定位日志②：start() 本身抛错（infrastructure fault）——区分"没调到 delegate"
+          logger.error('weave-addsubagent', 'start() 抛错（基础设施故障）', error instanceof Error ? error : new Error(String(error)), {
+            node: name,
+            provider: options.provider,
+            elapsedMs: Date.now() - startAt,
+          })
+          throw error
+        }
+        // 问题 2 定位日志③：start() 成功返回（确认 run 对象有效 / 子代理 session id）
+        logger.info('weave-addsubagent', 'start() 返回', {
+          node: name,
+          provider: options.provider,
+          runId: run.id ?? '',
+          hasLocalAgent: run.localAgent !== undefined,
+          elapsedMs: Date.now() - startAt,
         })
         const result = await run.result
         const text = result.output.map((b) => (b.type === 'text' ? b.text : '')).join('\n').trim()
+        // 问题 2 定位日志④：result 内容（确认 stopReason / output 是否为空）
+        logger.info('weave-addsubagent', 'run.result 返回', {
+          node: name,
+          provider: options.provider,
+          runId: run.id ?? '',
+          stopReason: result.stopReason,
+          outputBlocks: result.output.length,
+          textLen: text.length,
+          textHead: text.slice(0, 200),
+          elapsedMs: Date.now() - startAt,
+        })
 
         // 产物落盘（artifactsRoot 传入且配置 artifactName 时）
         const patch: Record<string, unknown> = {
