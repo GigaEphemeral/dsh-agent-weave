@@ -11,7 +11,7 @@ import { createRestartManager } from '../../src/l2-engine/restart'
 
 const validYaml = `version: '1.0'
 graphVersion: '0.1.0'
-graphSchemaHash: ''
+graphSchemaHash: 'x'
 entryPoint: dev
 nodes:
   - { id: dev, nodeType: condition }
