@@ -174,7 +174,10 @@ export function createStateGraph<T extends Record<string, unknown>>(
         const upstreamSummary = upstreamArtifacts
           ? Object.entries(upstreamArtifacts).map(([n, p]) => `[${n}] ${p}`).join('\n')
           : '（无上游产物）'
-        const prompt = (options.promptTemplate ?? '以 {{provider}} 角色完成任务：\n{{user_input}}\n\n上游产物：\n{{upstream}}')
+        // 通道 C（问题 5）：行为约束——子代理每步输出 [动作]，供观测"在干什么"
+        const prompt = (options.promptTemplate ??
+          '以 {{provider}} 角色完成任务：\n{{user_input}}\n\n上游产物：\n{{upstream}}\n\n' +
+          '【行为约束】每次调用工具前，先输出一行 "[动作] 正在 <做什么>（工具: <toolName>）"，例如 "[动作] 正在搜索相关文件（工具: glob）"。')
           .replaceAll('{{provider}}', options.provider)
           .replaceAll('{{user_input}}', String((state.user_input as string | undefined) ?? ''))
           .replaceAll('{{upstream}}', upstreamSummary)
