@@ -12,7 +12,9 @@ import { createStateGraph, SKIP, type StateGraph } from './state-graph.js'
 import { computeGraphSchemaHash, GraphValidationError, parseGraphDefinition } from './graph-definition.js'
 import { evaluateCondition } from './condition-edge.js'
 import { validateGraph } from './static-validator.js'
-import type { GraphDefinitionSpec } from './types.js'
+import type { GraphDefinitionSpec, TrajectoryEvent } from './types.js'
+import type { RunLedger } from '../l5-observability/run-ledger.js'
+import type { TokenCollector } from '../l5-observability/token-collector.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -35,11 +37,12 @@ export class GraphEngineService extends Service {
   }
 
   /** 创建隔离的 StateGraph 实例（默认配置或显式 maxIterations）。 */
-  create<T extends Record<string, unknown>>(maxIterations?: number): StateGraph<T> {
+  create<T extends Record<string, unknown>>(maxIterations?: number, artifactsRoot?: string): StateGraph<T> {
     return createStateGraph<T>(
       this.ctx,
       maxIterations ?? this.config.defaultMaxIterations,
       this.config.maxConcurrentChildren,
+      artifactsRoot,
     )
   }
 
@@ -53,7 +56,19 @@ export class GraphEngineService extends Service {
    *
    * @throws GraphValidationError 校验失败
    */
-  fromDefinition<T extends Record<string, unknown>>(spec: unknown): StateGraph<T> {
+  fromDefinition<T extends Record<string, unknown>>(
+    spec: unknown,
+    opts?: {
+      /** P4.0.18：产物根目录（缺省 Config.artifactsRoot）。 */
+      artifactsRoot?: string
+      /** P4.0.18：事件接收器（共享总线桥接）。 */
+      eventSink?: (e: TrajectoryEvent) => void
+      /** P4.0.18：RunLedger。 */
+      ledger?: RunLedger
+      /** P4.0.18：TokenCollector。 */
+      tokenCollector?: TokenCollector
+    },
+  ): StateGraph<T> {
     const parsed = parseGraphDefinition(spec)
     const validation = validateGraph(parsed, {
       registeredRoles: new Set(this.registeredRoles()),
@@ -66,6 +81,10 @@ export class GraphEngineService extends Service {
       this.ctx,
       parsed.maxIterations ?? this.config.defaultMaxIterations,
       this.config.maxConcurrentChildren,
+      opts?.artifactsRoot,
+      opts?.eventSink,
+      opts?.ledger,
+      opts?.tokenCollector,
     )
 
     for (const node of parsed.nodes) {

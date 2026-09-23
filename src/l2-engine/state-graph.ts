@@ -34,6 +34,21 @@ import type {
 import { mergeState } from './atomic-merge.js'
 import { createQueueingCounter } from './concurrency-counter.js'
 import { edgeKey, resolveNextNode } from './condition-edge.js'
+import type { RunLedger, LedgerEventType } from '../l5-observability/run-ledger.js'
+import type { TokenCollector } from '../l5-observability/token-collector.js'
+
+/** 轨迹事件 → ledger 事件类型映射（P1-1）。 */
+function mapToLedgerType(type: TrajectoryEvent['type']): LedgerEventType {
+  switch (type) {
+    case 'graph/start': return 'graph/start'
+    case 'graph/node-start': return 'graph/node-start'
+    case 'graph/node-end': return 'graph/node-end'
+    case 'graph/node-error': return 'graph/node-error'
+    case 'graph/end': return 'graph/end'
+    case 'graph/checkpoint-written': return 'checkpoint-written'
+    default: return 'checkpoint-written' // error / loop-iteration → 保守映射
+  }
+}
 
 export const END = '__END__'
 /** NEW-4：显式跳过本条件边，让引擎尝试下一条或静态边。 */
@@ -108,11 +123,24 @@ export interface EngineOptions {
   artifactsRoot?: string
 }
 
+/** P4.0.1 + P1-1/P1-2：引擎可选观测接入点。 */
+export interface EngineObservability {
+  /** 事件接收器（每个 graph/* 事件同步回调，供共享总线桥接）。 */
+  eventSink?: (event: TrajectoryEvent) => void
+  /** RunLedger（只追加审计账本，P1-1）。 */
+  ledger?: RunLedger
+  /** Token 分账收集器（node-end 时写，P1-2）。 */
+  tokenCollector?: TokenCollector
+}
+
 export function createStateGraph<T extends Record<string, unknown>>(
   ctx: Context,
   maxIterations = 25,
   maxConcurrentChildren = 8,
   artifactsRoot?: string,
+  eventSink?: (event: TrajectoryEvent) => void,
+  ledger?: RunLedger,
+  tokenCollector?: TokenCollector,
 ): StateGraph<T> {
   const nodes = new Map<string, NodeHandler<T>>()
   const nodeMetas = new Map<string, NodeMeta>() // NEW-10
@@ -123,6 +151,9 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
   // P3.D.4：排队版并发闸（超限排队等待，非拒绝）
   const concurrency = createQueueingCounter(ctx, maxConcurrentChildren)
+
+  /** 节点角色（P1-2 token 分账 data source；缺省回退 nodeType/节点名）。 */
+  const roleOf = (node: string): string => nodeMetas.get(node)?.role ?? node
 
   return {
     addNode(name, handler, meta) {
@@ -185,7 +216,9 @@ export function createStateGraph<T extends Record<string, unknown>>(
         const run = await nodeCtx.ctx.subagents.start(options.provider, {
           prompt: [{ type: 'text', text: prompt }],
           parent: agent as never,
-          signal: signal ?? new AbortController().signal, // P3.A.3：中断信号贯通
+          // P4.0.4：signal 契约必填——贯通外部 signal；无外部时新建真实 controller signal
+          //（绝不伪造共享/永不中止的假 signal，保证 STOP 实时传播）
+          signal: signal ?? new AbortController().signal,
           label: `${name}（${options.provider}）`,
         })
         const result = await run.result
@@ -238,6 +271,29 @@ export function createStateGraph<T extends Record<string, unknown>>(
         trajectory.push(event)
         // graph/* 事件非 Cordis 内置 Events 类型，用宽松签名发射
         ;(ctx.emit as (name: string, payload: unknown) => void)(event.type, event)
+        // P4.0.1：可选事件接收器（共享总线/SSE 桥接）
+        eventSink?.(event)
+        // P1-1：RunLedger 只追加（node 级事件；error/loop 保守映射）
+        if (ledger && event.node) {
+          ledger.append({
+            type: mapToLedgerType(event.type),
+            graphId: event.graphId,
+            node: event.node,
+            timestamp: event.timestamp,
+            ...(event.data !== undefined ? { data: event.data } : {}),
+          })
+        }
+        // P1-2：node-end 写 token 分账（真实数值非 0 来源）
+        if (event.type === 'graph/node-end' && event.data) {
+          const d = event.data
+          if (typeof d.inputTokens === 'number') {
+            tokenCollector?.record(event.node ?? '', roleOf(event.node ?? ''), {
+              inputTokens: d.inputTokens,
+              outputTokens: (d.outputTokens as number) ?? 0,
+              cacheReadTokens: (d.cacheReadTokens as number) ?? 0,
+            })
+          }
+        }
         ensureTraceFile()
         if (trace.file) {
           try {

@@ -28,6 +28,19 @@ interface PendingWait<T> {
   resolve: (m: T) => void
   reject: (e: Error) => void
   timer: NodeJS.Timeout | null
+  // P4.0.14：保存 abort listener 引用，清理时移除（防泄漏）
+  onAbort: (() => void) | null
+  signal: AbortSignal | null
+}
+
+/** P4.0.14：清理一个等待条目（移除队列/清超时/摘 abort listener）。 */
+function cleanup<T>(entry: PendingWait<T>, pending: Array<PendingWait<T>>): void {
+  const i = pending.indexOf(entry)
+  if (i >= 0) pending.splice(i, 1)
+  if (entry.timer) clearTimeout(entry.timer)
+  if (entry.onAbort && entry.signal) {
+    entry.signal.removeEventListener('abort', entry.onAbort)
+  }
 }
 
 /** 创建等待唤醒器。 */
@@ -37,23 +50,22 @@ export function createWaitFor<T extends MessageDelivery = MessageDelivery>(): Wa
   return {
     wait(predicate, opts) {
       return new Promise<T>((resolve, reject) => {
-        const entry: PendingWait<T> = { predicate, resolve, reject, timer: null }
+        const entry: PendingWait<T> = { predicate, resolve, reject, timer: null, onAbort: null, signal: opts?.signal ?? null }
         // 超时
         if (opts?.timeoutMs) {
           entry.timer = setTimeout(() => {
-            const i = pending.indexOf(entry)
-            if (i >= 0) pending.splice(i, 1)
+            cleanup(entry, pending)
             reject(new Error(`等待消息超时（${opts.timeoutMs}ms）`))
           }, opts.timeoutMs)
         }
         // 外部中止
         if (opts?.signal) {
-          opts.signal.addEventListener('abort', () => {
-            const i = pending.indexOf(entry)
-            if (i >= 0) pending.splice(i, 1)
-            if (entry.timer) clearTimeout(entry.timer)
+          const onAbort = () => {
+            cleanup(entry, pending)
             reject(new Error('等待被中止'))
-          })
+          }
+          entry.onAbort = onAbort
+          opts.signal.addEventListener('abort', onAbort, { once: true })
         }
         pending.push(entry)
       })
@@ -64,8 +76,7 @@ export function createWaitFor<T extends MessageDelivery = MessageDelivery>(): Wa
         const entry = pending[i]
         if (entry === undefined) continue
         if (entry.predicate(msg as T)) {
-          if (entry.timer) clearTimeout(entry.timer)
-          pending.splice(i, 1)
+          cleanup(entry, pending)
           entry.resolve(msg as T)
           woken++
         }

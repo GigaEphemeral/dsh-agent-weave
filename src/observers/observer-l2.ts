@@ -5,6 +5,7 @@
  * 只读、非阻塞、fail-open；超预算降级为 L1（不发信号）。
  */
 import type { ObserverSignal } from '../observers/signal.js'
+import { createObserverSignal } from '../observers/signal.js'
 
 export type L2SignalLevel = 'green' | 'yellow' | 'red'
 
@@ -55,20 +56,14 @@ export function createL2Observer(): L2Observer {
       return { level: 'yellow', findings, signaled: true }
     },
     toSignal(input) {
-      const { observerId, observedNode, result, summary } = input
-      return {
-        id: `sig-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        observer_id: observerId,
-        correlation_id: '',
-        observed_node: observedNode,
-        signal_level: result.level,
-        concern_level: result.level === 'red' ? 'significant' : result.level === 'yellow' ? 'minor' : 'none',
-        action: result.level === 'red' ? 'send-red-signal' : result.level === 'yellow' ? 'internal-log' : 'silent',
-        criteria_matched: result.findings,
-        summary,
-        timestamp: Date.now(),
-        token_used: 0,
-      }
+      // P4.0.13：信号统一走 createObserverSignal（P2-3 消除内联类型漂移）
+      return createObserverSignal({
+        observer_id: input.observerId,
+        observed_node: input.observedNode,
+        signal_level: input.result.level,
+        criteria_matched: input.result.findings,
+        summary: input.summary,
+      })
     },
   }
 }

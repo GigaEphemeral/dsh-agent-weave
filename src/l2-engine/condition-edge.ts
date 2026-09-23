@@ -138,9 +138,14 @@ export function resolveNextNode(
       if (used < maxIter) {
         return edge.to // 回退
       }
-      // 边级用尽 → 升级：优先同源 cond 边（审批路径），否则 __END__
+      // 边级用尽 → 升级：优先同源 cond 边（edgeRole='escalate' 显式标记；P4.0.7），
+      // 兼容旧 YAML：无 edgeRole 时按目标节点名含 'approval' 推断
       const escalate = outgoing.find(
-        (e) => e.from === current && e.type === 'cond' && e.to.includes('approval'),
+        (e) =>
+          e.from === current &&
+          e.type === 'cond' &&
+          ((e.edgeRole === 'escalate') ||
+            (e.edgeRole === undefined && e.to.includes('approval'))),
       )
       return escalate?.to ?? '__END__'
     }

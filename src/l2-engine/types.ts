@@ -28,13 +28,18 @@ export type NodeHandler<T> = (
 
 /**
  * 条件处理器：返回下一个节点名（单目标）或并行目标数组（MVP-3 预留）。
- * 返回 `'__END__'` 哨兵表示终止。
+ * 返回 `'__END__'` 哨兵表示终止；`'__SKIP__'` 显式跳过本条件边（P4.0.11）。
  */
 export type ConditionHandler<T> = (
   state: T,
   ctx: GraphNodeContext<T>,
   signal?: AbortSignal,
-) => string | readonly string[] | '__END__' | Promise<string | readonly string[] | '__END__'>
+) =>
+  | string
+  | readonly string[]
+  | '__END__'
+  | '__SKIP__'
+  | Promise<string | readonly string[] | '__END__' | '__SKIP__'>
 
 /** 节点执行上下文。 */
 export interface GraphNodeContext<T> {
@@ -164,6 +169,8 @@ export interface GraphNodeSpec {
   roleRef?: string
   promptTemplate?: string
   nodeType: 'role' | 'condition' | 'approval'
+  /** P4.0.6：产物文件名（缺省 <nodeId>.md）。 */
+  artifactName?: string
 }
 
 /** 图边规格。 */
@@ -175,6 +182,8 @@ export interface GraphEdgeSpec {
   when?: string
   /** 循环边最大回退次数（loop 边必有）。 */
   maxIter?: number
+  /** P4.0.7：边角色（escalate=升级审批路径）。 */
+  edgeRole?: 'normal' | 'escalate'
 }
 
 /** checkpoint 规格。 */

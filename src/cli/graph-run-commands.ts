@@ -13,14 +13,10 @@ import { computeGraphSchemaHash } from '../l2-engine/graph-definition.js'
 import { validateGraph } from '../l2-engine/static-validator.js'
 import { createStateGraph, SKIP } from '../l2-engine/state-graph.js'
 import { evaluateCondition } from '../l2-engine/condition-edge.js'
-import { createEventBus } from '../l4-visual/host/event-bus.js'
+import { setGlobalBus } from '../l4-visual/host/shared-bus.js'
+import { resolveArtifactsRoot } from '../l4-visual/host/artifacts-root.js'
 import { formatStatusHeader } from '../l4-visual/host/terminal-view.js'
 import type { GraphDefinitionSpec } from '../l2-engine/types.js'
-
-/** 默认产物根（问题 4：显式 output_dir 优先，否则 cwd 兜底）。 */
-function defaultOutputRoot(): string {
-  return join(process.cwd(), 'productions')
-}
 
 /** 运行真实图（role 节点接真实 subagent）。返回结构化结果。 */
 export async function runGraphRealTool(
@@ -29,24 +25,27 @@ export async function runGraphRealTool(
   userInput: string,
   parent: unknown,
   outputDir?: string,
+  initialState?: Record<string, unknown>,
 ) {
   const validation = validateGraph(spec, { registeredRoles: new Set(ctx.subagents.list()) })
   if (!validation.valid) {
     return { ok: false, message: `图校验失败:\n${validation.errors.map((e) => `  · ${e.path}: ${e.message}`).join('\n')}` }
   }
 
-  const root = outputDir ?? defaultOutputRoot()
-  const graphId = `graph-${Date.now()}`
-  const graph = createStateGraph<Record<string, unknown>>(ctx, spec.maxIterations ?? 25, 4, root)
-  const bus = createEventBus({ graphId, maxIterations: spec.maxIterations ?? 25 })
+  const root = resolveArtifactsRoot({ explicit: outputDir })
+  // P4.0.10：graphId 一次生成全程复用（含全局共享 bus）
+  const graphId = `graph-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const bus = setGlobalBus(graphId)
   bus.handle({ type: 'graph/start', graphId, timestamp: Date.now() })
+  const graph = createStateGraph<Record<string, unknown>>(ctx, spec.maxIterations ?? 25, 4, root)
 
   // 节点：role → addSubagent；condition/approval → pass-through/门
   for (const node of spec.nodes) {
     if (node.nodeType === 'role' && node.roleRef) {
       graph.addSubagent(node.id, {
         provider: node.roleRef,
-        artifactName: `${node.id}.md`,
+        // P4.0.6：artifactName 支持（缺省 <nodeId>.md）
+        artifactName: node.artifactName ?? `${node.id}.md`,
         role: node.roleRef,
         ...(node.promptTemplate !== undefined ? { promptTemplate: node.promptTemplate } : {}),
       })
@@ -107,7 +106,14 @@ export async function runGraphRealTool(
   }
 
   const result = await graph.run(
-    { messages: [], retry_count: 0, max_iterations: spec.maxIterations ?? 25, user_input: userInput } as Record<string, unknown>,
+    // P4.0.8：initial_state 支持（默认字段 + 用户覆盖）
+    {
+      messages: [],
+      retry_count: 0,
+      max_iterations: spec.maxIterations ?? 25,
+      user_input: userInput,
+      ...(initialState ?? {}),
+    } as Record<string, unknown>,
     {
       checkpoint,
       graphVersion: spec.graphVersion,
@@ -138,6 +144,7 @@ export function registerGraphRunCommand(ctx: Context): () => void {
         path: { type: 'string', required: true, description: '图 YAML 文件路径' },
         user_input: { type: 'string', required: true, description: '用户一句话需求' },
         output_dir: { type: 'string', description: '可选产物目录（默认 <cwd>/productions）' },
+        initial_state: { type: 'object', additionalProperties: true, description: '初始状态字段（可选，覆盖默认 messages/retry_count 等）' },
       },
       output: {
         schema: { type: 'string' },
@@ -147,7 +154,14 @@ export function registerGraphRunCommand(ctx: Context): () => void {
       },
       async execute(args, exec) {
         const spec = loadGraphSpec(args.path)
-        const r = await runGraphRealTool(ctx, spec, args.user_input, exec.agent, args.output_dir)
+        const r = await runGraphRealTool(
+          ctx,
+          spec,
+          args.user_input,
+          exec.agent,
+          args.output_dir,
+          args.initial_state as Record<string, unknown> | undefined,
+        )
         return [
           r.snapshot ?? '',
           '',

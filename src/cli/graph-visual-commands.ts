@@ -24,9 +24,12 @@ import { validateGraph } from '../l2-engine/static-validator.js'
 import { createStateGraph, END } from '../l2-engine/state-graph.js'
 import { evaluateCondition } from '../l2-engine/condition-edge.js'
 import { createEventBus } from '../l4-visual/host/event-bus.js'
+import { setGlobalBus } from '../l4-visual/host/shared-bus.js'
+import { resolveArtifactsRoot } from '../l4-visual/host/artifacts-root.js'
 import { createTerminalView, formatStatusHeader } from '../l4-visual/host/terminal-view.js'
 import { renderHtmlReport } from '../l4-visual/host/html-report.js'
 import { createLoopDetector } from '../l4-visual/host/loop-detector.js'
+import { readPauseState, pauseStatePath } from '../l2-engine/chain-runner.js'
 import type { GraphDefinitionSpec } from '../l2-engine/types.js'
 
 /** 最近一次执行的快照（供 status 工具查询）。 */
@@ -35,26 +38,22 @@ let lastSnapshot: ReturnType<typeof createEventBus>['getSnapshot'] extends () =>
 /** mock 延迟（毫秒）：模拟子代理执行耗时，便于观察实时视图。 */
 const MOCK_NODE_DELAY_MS = 300
 
-/** 产物根目录（FIX.6：从测试环境注入，非 process.cwd 硬编码的单一来源）。 */
-function artifactsRoot(): string {
-  return join(process.cwd(), 'productions')
-}
-
 /**
  * 运行图（mock 模式）：解析 → 校验 → 构建引擎 → 执行 → 返回结果 + 轨迹。
  * 同时向传入的 bus 推送事件。
  */
-export async function runGraphMock(ctx: Context, spec: GraphDefinitionSpec, bus: ReturnType<typeof createEventBus>) {
+export async function runGraphMock(ctx: Context, spec: GraphDefinitionSpec, bus: ReturnType<typeof createEventBus>, artifactsRoot?: string) {
   const validation = validateGraph(spec, { registeredRoles: new Set(ctx.subagents.list()) })
   if (!validation.valid) {
     return { ok: false, message: `图校验失败:\n${validation.errors.map((e) => `  · ${e.path}: ${e.message}`).join('\n')}` }
   }
 
+  const root = resolveArtifactsRoot({ explicit: artifactsRoot })
   const graph = createStateGraph<Record<string, unknown>>(
     ctx,
     spec.maxIterations ?? 25,
     8,
-    artifactsRoot(), // S9：trace 落盘
+    root, // P4.0.3：统一 artifactsRoot（不再用 cwd 硬编码）
   )
 
   // 注册节点：role/condition 用 mock handler；approval 用审批门
@@ -158,7 +157,9 @@ export function registerVisualCommands(ctx: Context): () => void {
         },
         async execute(args) {
           const spec = loadGraphSpec(args.path)
-          const bus = createEventBus({ graphId: `graph-${Date.now()}`, maxIterations: spec.maxIterations ?? 25 })
+          // P4.0.10：graphId 一次生成，全程复用（含全局共享 bus）
+          const graphId = `graph-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+          const bus = setGlobalBus(graphId)
           const detector = createLoopDetector()
           const output: string[] = []
           const capture = (line: string) => output.push(line)
@@ -166,7 +167,7 @@ export function registerVisualCommands(ctx: Context): () => void {
           view2.start()
           detector.start(bus, (a) => capture(a.message))
 
-          bus.handle({ type: 'graph/start', graphId: `graph-${Date.now()}`, timestamp: Date.now() })
+          bus.handle({ type: 'graph/start', graphId, timestamp: Date.now() })
           const r = await runGraphMock(ctx, spec, bus)
           view2.stop()
 
@@ -193,13 +194,25 @@ export function registerVisualCommands(ctx: Context): () => void {
         },
         async execute(args) {
           const spec = loadGraphSpec(args.path)
-          const graphId = `graph-${Date.now()}`
-          const bus = createEventBus({ graphId, maxIterations: spec.maxIterations ?? 25 })
+          const graphId = `graph-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+          const bus = setGlobalBus(graphId)
           bus.handle({ type: 'graph/start', graphId, timestamp: Date.now() })
           const r = await runGraphMock(ctx, spec, bus)
           const snap = bus.getSnapshot()
-          const html = renderHtmlReport(snap, spec.edges.map((e) => ({ from: e.from, to: e.to })))
-          const reportsDir = join(process.cwd(), 'reports')
+          // P4.0.9：pause 状态传入 HTML 报告（暂停原因/下一角色/已完成步）
+          const pauseState = readPauseState(pauseStatePath(resolveArtifactsRoot({})))
+          const html = renderHtmlReport(
+            snap,
+            spec.edges.map((e) => ({ from: e.from, to: e.to })),
+            pauseState
+              ? {
+                  pauseReason: pauseState.pauseReason,
+                  nextRoleId: pauseState.resumeInfo.nextRoleId,
+                  completedSteps: pauseState.resumeInfo.completedSteps,
+                }
+              : undefined,
+          )
+          const reportsDir = join(resolveArtifactsRoot({}), 'reports')
           mkdirSync(reportsDir, { recursive: true })
           const file = join(reportsDir, `${graphId}.html`)
           writeFileSync(file, html, 'utf8')
@@ -246,9 +259,9 @@ export function registerVisualCommands(ctx: Context): () => void {
           },
         },
         async execute(args) {
-          const { readdirSync, readFileSync } = await import('node:fs')
+          const { readdirSync, readFileSync, statSync } = await import('node:fs')
           const { join } = await import('node:path')
-          const tracesDir = join(artifactsRoot(), 'traces')
+          const tracesDir = join(resolveArtifactsRoot({}), 'traces')
           let files: string[]
           try {
             files = readdirSync(tracesDir).filter((f) => f.endsWith('.jsonl'))
@@ -256,12 +269,10 @@ export function registerVisualCommands(ctx: Context): () => void {
             return '（尚无 trace 日志，先运行 weave_graph_watch / weave_graph_report）'
           }
           if (files.length === 0) return '（traces 目录为空，先运行 weave_graph_watch / weave_graph_report）'
-          // 按文件大小取最新（jsonl 追加，最大的通常是最近的）
+          // P4.0.5：按 mtime 取最新（mtimeMs 降序；stat 失败保序）
           files.sort((a, b) => {
-            const fa = join(tracesDir, a)
-            const fb = join(tracesDir, b)
             try {
-              return readFileSync(fb, 'utf8').length - readFileSync(fa, 'utf8').length
+              return statSync(join(tracesDir, b)).mtimeMs - statSync(join(tracesDir, a)).mtimeMs
             } catch {
               return 0
             }

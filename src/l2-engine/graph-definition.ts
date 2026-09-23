@@ -27,6 +27,7 @@ export const GraphNodeSpecSchema = z.object({
   roleRef: z.string().optional(),
   promptTemplate: z.string().optional(),
   nodeType: z.enum(['role', 'condition', 'approval']),
+  artifactName: z.string().optional(), // P4.0.6
 })
 
 export const GraphEdgeSpecSchema = z
@@ -36,6 +37,7 @@ export const GraphEdgeSpecSchema = z
     type: z.enum(['seq', 'cond', 'loop', 'parallel']),
     when: z.string().optional(),
     maxIter: z.number().int().positive().optional(),
+    edgeRole: z.enum(['normal', 'escalate']).optional(), // P4.0.7
   })
   .refine((edge) => edge.type !== 'cond' || edge.when !== undefined, {
     message: 'cond 边必须有 when 字段',

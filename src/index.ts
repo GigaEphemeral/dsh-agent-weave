@@ -96,6 +96,6 @@ export function apply(ctx: Context, config: Config = {}): void {
   })
   logger.info('weave', 'MVP-2 图引擎与命令就绪', {
     graph_service: true,
-    commands: ['weave_graph_validate', 'weave_graph_show', 'weave_graph_help', 'weave_graph_watch', 'weave_graph_report', 'weave_graph_status', 'weave_run_graph'],
+    commands: ['weave_graph_validate', 'weave_graph_show', 'weave_graph_help', 'weave_graph_watch', 'weave_graph_report', 'weave_graph_status', 'weave_graph_tail', 'weave_run_graph'],
   })
 }

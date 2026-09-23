@@ -27,7 +27,7 @@ export interface ExecutionSnapshot {
   startedAt: number
   elapsedMs: number
   tokenUsed: number
-  status: 'running' | 'completed' | 'failed' | 'aborted'
+  status: 'running' | 'completed' | 'failed' | 'aborted' | 'waiting' | 'paused'
   trajectory: TrajectoryEvent[]
   nodeStates: Record<string, NodeState>
 }
@@ -105,7 +105,10 @@ export function createEventBus(options: EventBusOptions = {}): GraphEventBusInte
         status = 'failed'
         break
       case 'graph/end':
-        status = 'completed'
+        // P0-10：支持等待/暂停状态（data.status 显式声明；缺省 completed）
+        if (data.status === 'paused') status = 'paused'
+        else if (data.status === 'waiting') status = 'waiting'
+        else status = 'completed'
         break
       default:
         break
