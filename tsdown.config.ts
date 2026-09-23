@@ -23,10 +23,21 @@ export default defineConfig({
   sourcemap: true,
   clean: false,
   deps: {
-    // cordis DI 实体由 loader module table 提供：保持 external。
-    neverBundle: (id: string) => id === '@deepseek-ai/cordis',
+    // cordis/react 由 loader module table 提供：保持 external（避免双 react）。
+    neverBundle: (id: string) =>
+      id === '@deepseek-ai/cordis' ||
+      id === 'react' ||
+      id === 'react/jsx-runtime' ||
+      id === 'react-dom' ||
+      id === 'react-dom/client',
     // 其余一律内联（浏览器没有 node_modules 解析）。
-    alwaysBundle: (id: string) => !isBuiltin(id) && id !== '@deepseek-ai/cordis',
+    alwaysBundle: (id: string) =>
+      !isBuiltin(id) &&
+      id !== '@deepseek-ai/cordis' &&
+      id !== 'react' &&
+      id !== 'react/jsx-runtime' &&
+      id !== 'react-dom' &&
+      id !== 'react-dom/client',
   },
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'),
