@@ -1,5 +1,7 @@
-import { dirname, isAbsolute, join, normalize, resolve } from 'node:path'
+import { isAbsolute, join, normalize, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { existsSync } from 'node:fs'
+
 import type { Context } from '@deepseek-ai/cordis'
 import { compileRoleDirectory } from './l3-roles/role-loader.js'
 import { registerChainTool } from './l2-engine/chain-tool.js'
@@ -30,19 +32,51 @@ export interface Config {
   baseProvider?: string
 }
 
-/** 插件包根目录（基于编译产物 lib/index.js 定位，避免依赖 process.cwd()）。 */
-const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+/** 基于 import.meta.url 计算的"疑似"包根（可能被 DSH loader 影响）。 */
+const SUSPECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** 解析目录：绝对路径直接用；相对路径基于插件包根。 */
+/**
+ * ★ 兼容性探测：DSH cordis loader 加载 bundle 形态时 import.meta.url 可能不可靠，
+ * 导致 PACKAGE_ROOT 被算成 lib/。这里按优先级探测真实目录：
+ *   1. SUSPECT_ROOT/roles         （正常情况）
+ *   2. SUSPECT_ROOT/../roles      （import.meta.url 多了一层子目录时）
+ *   3. SUSPECT_ROOT/../../roles   （更深的偏移，兜底）
+ */
+function locateDir(name: string): string {
+  const primary = join(SUSPECT_ROOT, name) // ★ 主候选（兜底返回值）
+  const candidates = [
+    primary,
+    join(SUSPECT_ROOT, '..', name),
+    join(SUSPECT_ROOT, '..', '..', name),
+  ]
+  for (const dir of candidates) {
+    if (existsSync(dir)) return dir
+  }
+  return primary // ★ 不索引数组
+}
+
+/** 解析目录：绝对路径直接用；相对路径基于探测到的包根。 */
 function resolveDir(configPath: string | undefined, fallback: string): string {
-  if (configPath !== undefined) return normalize(isAbsolute(configPath) ? configPath : join(PACKAGE_ROOT, configPath))
-  return join(PACKAGE_ROOT, fallback)
+  if (configPath !== undefined) {
+    return normalize(isAbsolute(configPath) ? configPath : join(SUSPECT_ROOT, configPath))
+  }
+  return locateDir(fallback)
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
   const rolesDir = resolveDir(config.rolesDir, 'roles')
   const skillsDir = resolveDir(config.skillsDir, 'skills')
   const baseProviderName = config.baseProvider ?? 'spawn'
+
+  // ★ 单一真相源：打印一次，便于诊断
+  console.log(
+      '[weave] SUSPECT_ROOT =', SUSPECT_ROOT,
+      '| import.meta.url =', import.meta.url,
+      '| rolesDir =', rolesDir,
+      '| rolesDir exists =', existsSync(rolesDir),
+      '| skillsDir =', skillsDir,
+      '| skillsDir exists =', existsSync(skillsDir),
+  )
 
   // 角色注册（延迟重试，等待 spawn provider 就绪）
   const tryRegisterRoles = (): boolean => {
@@ -75,9 +109,12 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (tryRegisterRoles() || attempts >= maxAttempts) {
         clearInterval(timer)
         if (attempts >= maxAttempts) {
-          logger.error('weave', '等待 spawn provider 超时，跳过角色注册（图命令不受影响）', new Error('spawn provider 未注册'), {
-            base_provider: baseProviderName,
-          })
+          logger.error(
+              'weave',
+              '等待 spawn provider 超时，跳过角色注册（图命令不受影响）',
+              new Error('spawn provider 未注册'),
+              { base_provider: baseProviderName },
+          )
         }
       }
     }, 100)
@@ -85,22 +122,35 @@ export function apply(ctx: Context, config: Config = {}): void {
     ctx.effect(() => () => clearInterval(timer))
   }
 
-  // 以下完全保持不变
+  // ─── 工具 & 服务注册 ──────────────────────────────────────
   registerChainTool(ctx)
   registerGraphCommands(ctx)
   registerVisualCommands(ctx)
-  registerGraphRunCommand(ctx) // 问题 2：真实图执行入口
+  // ★ 关键：把已解析的 rolesDir 传给图执行命令（单一真相源）
+  registerGraphRunCommand(ctx, { rolesDir })
+
   ctx.plugin(GraphEngineService, {
     defaultMaxIterations: 25,
     logTrajectory: true,
     maxConcurrentChildren: 8,
   })
+
   // MVP-4 Phase B：可视化 REST/SSE 运行时（webServer 鸭子类型，headless 静默跳过）
   const disposeVisual = registerVisualRuntime(ctx)
   ctx.effect(() => disposeVisual)
+
   logger.info('weave', 'MVP-2 图引擎与命令就绪', {
     graph_service: true,
     visual_runtime: true,
-    commands: ['weave_graph_validate', 'weave_graph_show', 'weave_graph_help', 'weave_graph_watch', 'weave_graph_report', 'weave_graph_status', 'weave_graph_tail', 'weave_run_graph'],
+    commands: [
+      'weave_graph_validate',
+      'weave_graph_show',
+      'weave_graph_help',
+      'weave_graph_watch',
+      'weave_graph_report',
+      'weave_graph_status',
+      'weave_graph_tail',
+      'weave_run_graph',
+    ],
   })
 }
