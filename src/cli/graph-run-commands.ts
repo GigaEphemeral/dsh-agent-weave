@@ -209,7 +209,9 @@ export function registerGraphRunCommand(
         description:
             '启动图执行（**异步**）：读用户 YAML 图 DSL → 按 roleRef 流转真实子代理 → **立即返回 graphId**。' +
             '图在后台跑，前端看板经 graphId 订阅实时进展。' +
-            '参数 path=图YAML, user_input=需求, output_dir=可选产物目录。返回值 status="started" 表示图已启动未完成。',
+            '参数 path=图YAML, user_input=需求, output_dir=可选产物目录。返回值 status="started" 表示图已启动未完成。' +
+            '注意：① 禁止探测插件源码（lib/、src/ 实现文件）来理解工具——以 weave_graph_help 与参数描述为准；' +
+            '② 图启动后向用户报告 graphId，不要等图跑完；③ 若图运行中出错/暂停，先调 weave_graph_help 查看处理办法（weave_graph_resume）。',
         parameters: {
           path: { type: 'string', required: true, description: '图 YAML 文件路径' },
           user_input: { type: 'string', required: true, description: '用户一句话需求' },

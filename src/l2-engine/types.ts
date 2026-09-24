@@ -129,6 +129,41 @@ export interface RunOptions<T> {
   }
   /** ★ 问题一步骤0：外部指定的 graphId（缺省引擎自己生成）。 */
   graphId?: string
+  /** ★ 问题五：从指定节点开始（恢复场景；缺省用 entryPoint）。 */
+  startFrom?: string
+  /** ★ 问题五：恢复场景——node → durable child session id（同一子代理复用）。 */
+  restoredChildSessions?: Record<string, string>
+  /** ★ 问题五：恢复场景——已完成节点（跳过已完成的产物验证）。 */
+  completedNodes?: string[]
+}
+
+/** ★ 问题五：暂停原因分类。 */
+export type PauseReason =
+  | 'user-pause' | 'approval-pending' | 'permission-denied'
+  | 'dependency-missing' | 'budget-exceeded'
+  | 'tool-error-retryable' | 'tool-error-fatal' | 'timeout'
+
+/** ★ 问题五：暂停快照（节点失败/需人工介入时落盘，供 weave_graph_resume 恢复）。 */
+export interface PauseSnapshot<T> {
+  graphId: string
+  graphVersion: string
+  graphSchemaHash: string
+  pausedNode: string
+  pausedAt: number
+  iteration: number
+  resumeFrom: string
+  pauseReason: PauseReason
+  pauseDetails: {
+    error?: string
+    deniedOperation?: string
+    requiredPermission?: string
+    suggestedAction?: string
+    contextTemplate?: string
+  }
+  state: T
+  loopUsage: Record<string, number>
+  childSessions: Record<string, string>
+  completedNodes: string[]
 }
 
 /** 节点元数据（NEW-10：currentRole 数据来源）。 */

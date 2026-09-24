@@ -7,7 +7,7 @@
  * - 引擎接入：质量门失败 → 节点失败 → 整图停（不再空跑后续节点）
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
@@ -101,10 +101,12 @@ describe('问题四修复1+2：质量门失败 → 整图停', () => {
         { messages: [], user_input: '任务' } as Record<string, unknown>,
         { checkpoint: async () => {}, graphVersion: '0.1.0', graphSchemaHash: 'h', agent: { sessionId: 'p' } as never },
       )
-      // dev 产物为空 → 质量门失败 → 整图 stop（success:false）
+      // dev 产物为空 → 质量门失败 → 图暂停（问题五：可恢复，而非裸 node-error）
       expect(r.success).toBe(false)
       expect(r.error?.message).toContain('质量门未过')
-      expect(r.trajectory.some((e) => e.type === 'graph/node-error')).toBe(true)
+      expect(r.data?.paused).toBe(true)
+      // 暂停快照落盘（问题五：供 weave_graph_resume 恢复）
+      expect(existsSync(join(root, 'pauses', `${r.graphId}.json`))).toBe(true)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

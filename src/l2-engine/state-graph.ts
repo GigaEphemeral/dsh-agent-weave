@@ -36,6 +36,9 @@ import { createQueueingCounter } from './concurrency-counter.js'
 import { edgeKey, resolveNextNode } from './condition-edge.js'
 import { validateNodeOutput } from './node-validator.js'
 import { getGraphControl, clearGraphControl } from './graph-control.js'
+import { classifyError } from './error-classifier.js'
+import { writePauseSnapshot } from './pause-snapshot.js'
+import type { PauseSnapshot } from './types.js'
 import type { RunLedger, LedgerEventType } from '../l5-observability/run-ledger.js'
 import type { TokenCollector } from '../l5-observability/token-collector.js'
 import { logger } from '../shared/logger.js'
@@ -326,6 +329,9 @@ export function createStateGraph<T extends Record<string, unknown>>(
   // P3.D.4：排队版并发闸（超限排队等待，非拒绝）
   const concurrency = createQueueingCounter(ctx, maxConcurrentChildren)
 
+  /** 问题五：node → durable child session id（同节点复用同一子代理；恢复场景预填）。 */
+  const childIdByNode = new Map<string, string>()
+
   /** 节点角色（P1-2 token 分账 data source；缺省回退 nodeType/节点名）。 */
   const roleOf = (node: string): string => nodeMetas.get(node)?.role ?? node
 
@@ -374,8 +380,6 @@ export function createStateGraph<T extends Record<string, unknown>>(
     addSubagent(name, options) {
       if (name === END || name === SKIP) throw new Error(`${name} 是保留哨兵`)
       if (nodes.has(name)) throw new Error(`节点已存在: ${name}`)
-      // 节点级持久化：node → durable child session id（同一节点复用同一子代理）
-      const childIdByNode = new Map<string, string>()
       nodes.set(name, async (state, nodeCtx, signal) => {
         const agent = nodeCtx.agent
         if (!agent) throw new Error(`子代理节点 "${name}" 需要 RunOptions.agent（真实 Agent 作 parent）`)
@@ -535,8 +539,17 @@ export function createStateGraph<T extends Record<string, unknown>>(
       const graphId = options.graphId ?? `graph-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const trajectory: TrajectoryEvent[] = []
       let state = initialState
-      let current: string = entryPoint
+      // ★ 问题五：startFrom 覆盖入口（恢复场景从暂停节点续跑）
+      let current: string = options.startFrom ?? entryPoint
       let iteration = options.initialIteration ?? 0
+      // ★ 问题五：恢复场景预填 childSessions（同一子代理复用，不新建）
+      if (options.restoredChildSessions) {
+        for (const [node, childId] of Object.entries(options.restoredChildSessions)) {
+          childIdByNode.set(node, childId)
+        }
+      }
+      // ★ 问题五：已完成节点（恢复场景跳过已完成的产物验证）
+      const completedNodes = new Set<string>(options.completedNodes ?? [])
 
       // S9：trace 事件落盘（可选，artifactsRoot 传入时同步追加；可靠性优先）
       const trace: { file: string | null } = { file: null }
@@ -770,6 +783,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
             }
           }
           state = mergeResult.state as T
+          // ★ 问题五：记录已完成节点（恢复快照用）
+          completedNodes.add(current)
 
           // S13：node-end 携带 token/retry 数据（供终端视图/HTML 报告）
           emit({
@@ -862,12 +877,75 @@ export function createStateGraph<T extends Record<string, unknown>>(
           if (next === END) break
           current = next
         } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error))
+          // ★ 问题五修复3：错误分类 → 需人工介入 → 暂停快照 + 通知（不再只发 node-error）
+          const classification = classifyError(err)
+          if (classification.needsUserIntervention && artifactsRoot) {
+            try {
+              const snapshot: PauseSnapshot<T> = {
+                graphId,
+                graphVersion: options.graphVersion,
+                graphSchemaHash: options.graphSchemaHash,
+                pausedNode: current,
+                pausedAt: Date.now(),
+                iteration,
+                resumeFrom: current,
+                pauseReason: classification.reason,
+                pauseDetails: classification.details,
+                state,
+                loopUsage: Object.fromEntries(loopUsed),
+                childSessions: Object.fromEntries(childIdByNode),
+                completedNodes: [...completedNodes],
+              }
+              writePauseSnapshot(artifactsRoot, snapshot)
+              emit({
+                type: 'graph/end',
+                graphId,
+                node: current,
+                timestamp: Date.now(),
+                data: {
+                  status: 'paused',
+                  pauseReason: classification.reason,
+                  resumeFrom: current,
+                  error: err.message,
+                },
+              })
+              logger.warn('weave', '图暂停（需人工介入）', {
+                graphId,
+                node: current,
+                pauseReason: classification.reason,
+                snapshotPath: `pauses/${graphId}.json`,
+              })
+              // 通知主 agent（approval 服务存在时；缺省记日志）
+              const approvalService = ctx.get('approval') as ApprovalServiceLike | undefined
+              if (approvalService && options.agent) {
+                void approvalService.request({
+                  agent: options.agent,
+                  toolName: 'weave.graph.paused',
+                  reason: `图在节点 ${current} 暂停：${classification.details.suggestedAction ?? '检查后恢复'}（weave_graph_resume）`,
+                  ...(options.signal !== undefined ? { signal: options.signal } : {}),
+                }).catch(() => {})
+              }
+            } catch (snapshotErr) {
+              logger.error('weave', '暂停快照落盘失败，回退 node-error', snapshotErr instanceof Error ? snapshotErr : new Error(String(snapshotErr)), { graphId })
+            }
+            return {
+              graphId,
+              success: false,
+              finalState: state,
+              trajectory,
+              iterations: iteration,
+              error: err,
+              data: { paused: true, pauseReason: classification.reason, resumeFrom: current },
+            }
+          }
+
           emit({
             type: 'graph/node-error',
             graphId,
             node: current,
             timestamp: Date.now(),
-            data: { error: error instanceof Error ? error.message : String(error) },
+            data: { error: err.message },
           })
           return {
             graphId,
@@ -875,7 +953,7 @@ export function createStateGraph<T extends Record<string, unknown>>(
             finalState: state,
             trajectory,
             iterations: iteration,
-            error: error instanceof Error ? error : new Error(String(error)),
+            error: err,
           }
         } finally {
           // RES.5 §四：release 必须在 finally（防止节点失败死锁）

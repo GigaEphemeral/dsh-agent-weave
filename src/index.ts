@@ -8,6 +8,7 @@ import { registerChainTool } from './l2-engine/chain-tool.js'
 import { registerGraphCommands } from './cli/graph-commands.js'
 import { registerVisualCommands } from './cli/graph-visual-commands.js'
 import { registerGraphRunCommand } from './cli/graph-run-commands.js'
+import { registerGraphResumeCommand } from './cli/graph-resume-commands.js'
 import { GraphEngineService } from './l2-engine/graph-service.js'
 import { registerVisualRuntime } from './l4-visual/host/visual-runtime.js'
 import { logger } from './shared/logger.js'
@@ -128,6 +129,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   registerVisualCommands(ctx)
   // ★ 关键：把已解析的 rolesDir 传给图执行命令（单一真相源）
   registerGraphRunCommand(ctx, { rolesDir })
+  registerGraphResumeCommand(ctx)
 
   ctx.plugin(GraphEngineService, {
     defaultMaxIterations: 25,
