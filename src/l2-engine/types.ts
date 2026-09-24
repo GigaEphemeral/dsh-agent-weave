@@ -82,6 +82,9 @@ export interface TrajectoryEvent {
     | 'graph/loop-iteration'
     | 'graph/observer-signal'  // P4.B.7：观察者信号
     | 'graph/node-activity'    // 子代理实时活动（tool-call/result/assistant）
+    | 'graph/paused'           // 图暂停（用户暂停/人工介入）
+    | 'graph/node-idle-warning' // 子代理空闲提示（仅提示不中止）
+    | 'graph/node-loop-detected' // 子代理循环调用提示（仅提示不中止）
   graphId: string
   /** 关联节点（graph/start、graph/end、graph/error 可为空）。 */
   node?: string
@@ -219,6 +222,11 @@ export interface GraphNodeSpec {
   nodeType: 'role' | 'condition' | 'approval'
   /** P4.0.6：产物文件名（缺省 <nodeId>.md）。 */
   artifactName?: string
+  /** 问题三 D1：输入门禁（要求上游节点产物存在且非空）。 */
+  inputGate?: {
+    requires: string[]
+    requiresAny?: string[]
+  }
 }
 
 /** 图边规格。 */

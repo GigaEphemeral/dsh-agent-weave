@@ -85,6 +85,33 @@ export function applyEvent(prev: GraphSnapshot | null, event: WsBizEvent): Graph
     case 'graph-end':
       next.status = data.status === 'paused' ? 'paused' : data.status === 'waiting' ? 'waiting' : 'completed'
       break
+    case 'graph-paused':
+      next.status = 'paused'
+      if (typeof data.reason === 'string') next.pauseReason = data.reason
+      break
+    case 'node-idle-warning':
+      if (event.node) {
+        next.idleWarnings = { ...(next.idleWarnings ?? {}), [event.node]: (data.idleMs as number) ?? 0 }
+        notifyIdle(event.node, (data.idleMs as number) ?? 0)
+      }
+      break
+    case 'node-loop-detected':
+      if (event.node) {
+        next.loopAlerts = { ...(next.loopAlerts ?? {}), [event.node]: data }
+      }
+      break
   }
   return next
+}
+
+/** 空闲告警 → 浏览器 Notification（仅提示，不中止）。 */
+function notifyIdle(node: string, idleMs: number): void {
+  if (typeof window === 'undefined' || !('Notification' in window)) return
+  if (Notification.permission !== 'granted') return
+  try {
+    const idleMin = Math.round(idleMs / 60_000)
+    new Notification(`节点 ${node} 已 ${idleMin} 分钟无活动`, { body: '可能卡死，可在看板点击暂停' })
+  } catch {
+    // 通知失败不影响主流程
+  }
 }

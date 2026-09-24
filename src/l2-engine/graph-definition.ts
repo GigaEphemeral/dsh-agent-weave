@@ -28,6 +28,10 @@ export const GraphNodeSpecSchema = z.object({
   promptTemplate: z.string().optional(),
   nodeType: z.enum(['role', 'condition', 'approval']),
   artifactName: z.string().optional(), // P4.0.6
+  inputGate: z.object({ // 问题三 D1
+    requires: z.array(z.string()).default([]),
+    requiresAny: z.array(z.string()).optional(),
+  }).optional(),
 })
 
 export const GraphEdgeSpecSchema = z

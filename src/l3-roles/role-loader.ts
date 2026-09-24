@@ -122,6 +122,15 @@ export function compileRoleProfile(role: RoleDefinition, options: CompileOptions
  * @returns 可注册到 ctx.subagents 的 SubagentProvider
  * @throws {RoleLoadError} skill 文件不存在、读取失败或路径逃逸
  */
+/** 问题三 C1：禁止 spawn 的工具名单（角色 allow_delegation=false 时从 toolFilter 剥离）。 */
+const FORBIDDEN_TOOLS = new Set(['subagent', 'delegate', 'spawn', 'fork', 'create_child', 'list_subagent_models'])
+
+/** 按 capability 剥离 spawn 类工具（allow_delegation=false 时）。 */
+function sanitizeTools(tools: readonly string[], allowDelegation: boolean): string[] {
+  if (allowDelegation) return [...tools]
+  return tools.filter((t) => !FORBIDDEN_TOOLS.has(t.toLowerCase()))
+}
+
 export function compileRoleToProvider(
   role: RoleDefinition,
   options: CompileOptions,
@@ -147,11 +156,13 @@ export function compileRoleToProvider(
       const injected: ResolvedSubagentStartRequest = {
         ...request,
         persona: profile.persona,
-        toolFilter: { allow: [...profile.toolFilter] },
+        // ★ 问题三 C1：剥离 spawn 类工具（allow_delegation=false 时）
+        toolFilter: { allow: sanitizeTools(profile.toolFilter, profile.capability.allow_delegation) },
         agentOptions: {
           provider: profile.agentOptions.provider,
           model: profile.agentOptions.model,
         },
+        // ★ 问题三 C1：maxDepth 从 capability 读（已由 compileRoleProfile.depthLimit 提供）
         ...(profile.depthLimit !== undefined ? { maxDepth: profile.depthLimit } : {}),
       }
       return delegate.start(injected)

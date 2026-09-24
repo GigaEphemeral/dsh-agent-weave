@@ -114,5 +114,14 @@ export function apply(ctx: Context): void {
         diag('global SSE FAILED', { error: error instanceof Error ? error.message : String(error) })
     }
 
+    // 问题三 D3：空闲告警浏览器 Notification 权限（可选，默认不打扰）
+    try {
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+            void Notification.requestPermission()
+        }
+    } catch {
+        // 权限请求失败忽略
+    }
+
     diag('apply done')
 }

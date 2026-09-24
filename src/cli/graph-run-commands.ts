@@ -98,6 +98,8 @@ export async function runGraphRealTool(
         role: node.roleRef,
         ...(node.promptTemplate !== undefined ? { promptTemplate: node.promptTemplate } : {}),
         ...(role && role.quality_gate.length > 0 ? { qualityGate: role.quality_gate } : {}),
+        // 问题三 D1：透传 inputGate（图 DSL 节点可配置）
+        ...(node.inputGate !== undefined ? { inputGate: node.inputGate } : {}),
       })
     } else if (node.nodeType === 'approval') {
       graph.addApprovalGate(node.id, {

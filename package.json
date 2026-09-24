@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-weave",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "可视化 Agent 任务编排工具：多角色 subagent 协作编排",
   "type": "module",
   "license": "MIT",

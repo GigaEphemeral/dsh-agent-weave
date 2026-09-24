@@ -25,6 +25,12 @@ export interface GraphSnapshot {
   tokenUsed: number
   status: string
   nodeStates: Record<string, string>
+  /** 暂停原因（graph-paused 事件写入）。 */
+  pauseReason?: string
+  /** 节点空闲告警（idleMs）。 */
+  idleWarnings?: Record<string, number>
+  /** 节点循环调用告警。 */
+  loopAlerts?: Record<string, Record<string, unknown>>
 }
 
 /** Token 行。 */

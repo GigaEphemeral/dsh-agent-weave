@@ -76,6 +76,7 @@ export async function resumeGraphRealTool(
         artifactName: node.artifactName ?? `${node.id}.md`,
         role: node.roleRef,
         ...(node.promptTemplate !== undefined ? { promptTemplate: node.promptTemplate } : {}),
+        ...(node.inputGate !== undefined ? { inputGate: node.inputGate } : {}),
       })
     } else if (node.nodeType === 'approval') {
       graph.addApprovalGate(node.id, {

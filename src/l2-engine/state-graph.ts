@@ -19,7 +19,7 @@
  * - S11：无出边发 warning 级 graph/error 事件（不改变成功语义）
  * - S13：node-end 事件携带 inputTokens/outputTokens/cacheReadTokens/tokenUsed/retryCount
  */
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
@@ -38,6 +38,7 @@ import { validateNodeOutput } from './node-validator.js'
 import { getGraphControl, clearGraphControl } from './graph-control.js'
 import { classifyError } from './error-classifier.js'
 import { writePauseSnapshot } from './pause-snapshot.js'
+import { waitForSubagentEnd, PauseError } from './subagent-waiter.js'
 import type { PauseSnapshot } from './types.js'
 import type { RunLedger, LedgerEventType } from '../l5-observability/run-ledger.js'
 import type { TokenCollector } from '../l5-observability/token-collector.js'
@@ -52,63 +53,6 @@ function safeProviderList(ctx: Context): string[] {
   }
 }
 
-/** 子代理端信息最小形态（subagent/end 事件载荷）。 */
-interface SubagentEndLike {
-  id: string
-  provider: string
-  stopReason?: string
-  lastAssistantMessage?: Array<{ type: string; text?: string }>
-}
-
-/**
- * 等待一个 durable child 的 subagent/end 事件（问题三：continuable 无 result，
- * 结果经生命周期事件异步返回）。订阅发生在调用时；超时/中止兜底返回空 output。
- * 默认 5 分钟（LLM 子代理执行量级），超时记日志并返回空（不挂死图）。
- */
-function waitForSubagentEnd(
-  ctx: Context,
-  childId: string,
-  signal?: AbortSignal,
-  timeoutMs = 300_000,
-): Promise<{ output: Array<{ type: string; text?: string }>; stopReason: string }> {
-  return new Promise((resolve) => {
-    let done = false
-    let timer: NodeJS.Timeout | null = null
-    let dispose: (() => void) | undefined
-
-    const finish = (info?: SubagentEndLike): void => {
-      if (done) return
-      done = true
-      if (timer) clearTimeout(timer)
-      dispose?.() // ★ 用 ctx.on 返回的 disposer 取消订阅（ctx.off 未 inject 会崩溃）
-      resolve({
-        output: info?.lastAssistantMessage ?? [],
-        stopReason: info?.stopReason ?? 'completed',
-      })
-    }
-
-    const onEnd = (info: SubagentEndLike): void => {
-      if (info.id === childId) finish(info)
-    }
-    // ★ ctx.on 返回 disposer 函数（不访问 ctx.off）。
-    // ★ 关键：subagent/start|end 是 scoped 事件（按 delegating parent 载体分发），
-    //   必须传 { global: true } 才能全局收到（invariant.ts 同款用法）。
-    const ret = (ctx as unknown as {
-      on(name: string, cb: (info: SubagentEndLike) => void, options?: { global?: boolean }): (() => void) | void
-    }).on('subagent/end', onEnd, { global: true })
-    if (typeof ret === 'function') dispose = ret
-
-    timer = setTimeout(() => {
-      logger.warn('weave-addsubagent', '等待 subagent/end 超时，返回空 output', {
-        childId,
-        timeoutMs,
-      })
-      finish()
-    }, timeoutMs)
-    signal?.addEventListener('abort', () => finish(), { once: true })
-  })
-}
-
 /** 循环回退反馈（问题三预留：基于当前状态向原子代理说明为何打回）。 */
 function buildFeedbackFromState(state: Record<string, unknown>, node: string): string {
   const messages = (state.messages as Array<{ node?: string; stopReason?: string }> | undefined) ?? []
@@ -118,93 +62,41 @@ function buildFeedbackFromState(state: Record<string, unknown>, node: string): s
     `请根据已有工作继续，不要从头开始。${last?.stopReason ? `（上次 stopReason: ${last.stopReason}）` : ''}`
 }
 
-/** 子代理实时活动（看板展示用）。 */
-export interface SubagentActivity {
-  kind: 'thinking' | 'tool-call' | 'tool-result' | 'assistant'
-  tool?: string
-  args?: string
-  result?: string
-  text?: string
-}
-
-/**
- * 订阅一个 durable child 的 session 实时活动（session/event 是 Scoped 事件，
- * 需 { global: true } 全局监听；按 session.id 过滤）。
- * 返回取消订阅函数。
- */
-function bridgeSubagentActivity(
-  ctx: Context,
-  childId: string,
-  onActivity: (activity: SubagentActivity) => void,
-): () => void {
-  const c = ctx as unknown as {
-    on(
-      name: string,
-      cb: (session: { id?: string }, event: { type?: string; data?: Record<string, unknown> }) => void,
-      options?: { global?: boolean },
-    ): (() => void) | void
-  }
-  const dispose = c.on('session/event', (session, event) => {
-    if (session?.id !== childId) return
-    const data = event.data ?? {}
-    switch (event.type) {
-      case 'tool/call': {
-        const name = typeof data.name === 'string' ? data.name : typeof data.tool === 'string' ? data.tool : 'tool'
-        onActivity({
-          kind: 'tool-call',
-          tool: name,
-          args: safeJsonSnippet(data.arguments ?? data.input ?? data.params, 300),
-        })
-        break
-      }
-      case 'tool/result':
-        onActivity({
-          kind: 'tool-result',
-          tool: typeof data.tool === 'string' ? data.tool : 'tool',
-          result: safeJsonSnippet(data.output ?? data.value ?? data.content, 300),
-        })
-        break
-      case 'assistant/message': {
-        const blocks = data.message ?? data.content
-        const text = extractText(blocks)
-        if (text) onActivity({ kind: 'assistant', text })
-        break
-      }
-      case 'assistant/attempt': {
-        const text = extractText(data.message ?? data.content)
-        if (text) onActivity({ kind: 'thinking', text })
-        break
-      }
-      default:
-        break
+/** 问题三 D1：输入门禁检查（上游产物存在且非空）。 */
+function checkInputGate(
+  inputGate: { requires: string[]; requiresAny?: string[] } | undefined,
+  state: Record<string, unknown>,
+  name: string,
+): void {
+  if (!inputGate) return
+  const artifacts = state.artifacts as Record<string, string> | undefined
+  const missing: string[] = []
+  const check = (reqNode: string): void => {
+    const path = artifacts?.[reqNode]
+    if (!path) {
+      missing.push(`${reqNode}（未产出）`)
+      return
     }
-  }, { global: true })
-  return typeof dispose === 'function' ? dispose : () => {}
-}
-
-/** 安全截断 JSON 片段（长参数/结果只取前 300 字符）。 */
-function safeJsonSnippet(value: unknown, max = 300): string {
-  let s: string
-  try {
-    s = typeof value === 'string' ? value : JSON.stringify(value)
-  } catch {
-    s = String(value)
+    try {
+      if (!existsSync(path) || statSync(path).size === 0) {
+        missing.push(`${reqNode}（产物为空）`)
+      }
+    } catch {
+      missing.push(`${reqNode}（产物不可读）`)
+    }
   }
-  return s.length > max ? `${s.slice(0, max)}…` : s
-}
-
-/** 从 ContentBlock 数组提取文本。 */
-function extractText(blocks: unknown): string {
-  if (Array.isArray(blocks)) {
-    return blocks
-      .map((b) => {
-        const blk = b as { type?: string; text?: string }
-        return blk?.type === 'text' ? blk.text ?? '' : ''
-      })
-      .join('\n')
-      .trim()
+  if (inputGate.requires.length > 0) {
+    for (const reqNode of inputGate.requires) check(reqNode)
+  } else if (inputGate.requiresAny && inputGate.requiresAny.length > 0) {
+    const anyOk = inputGate.requiresAny.some((n) => {
+      const p = artifacts?.[n]
+      return p !== undefined && existsSync(p) && statSync(p).size > 0
+    })
+    if (!anyOk) missing.push(`requiresAny（均未产出有效产物）`)
   }
-  return ''
+  if (missing.length > 0) {
+    throw new Error(`输入门禁未过（节点 ${name}）: ${missing.join(', ')}`)
+  }
 }
 
 /** 轨迹事件 → ledger 事件类型映射（P1-1）。 */
@@ -285,6 +177,11 @@ export interface SubagentNodeOptions {
   role?: string
   /** 问题四：质量门（产物验证；空数组不验证）。 */
   qualityGate?: readonly string[]
+  /** 问题三 D1：输入门禁（要求上游节点产物存在且非空）。 */
+  inputGate?: {
+    requires: string[]
+    requiresAny?: string[]
+  }
 }
 
 /** 引擎实例选项。 */
@@ -383,6 +280,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
       nodes.set(name, async (state, nodeCtx, signal) => {
         const agent = nodeCtx.agent
         if (!agent) throw new Error(`子代理节点 "${name}" 需要 RunOptions.agent（真实 Agent 作 parent）`)
+        // 问题三 D1：输入门禁（上游产物存在且非空；缺失 → 抛错 → 图停）
+        checkInputGate(options.inputGate, state, name)
         const upstreamArtifacts = state.artifacts as Record<string, string> | undefined
         const upstreamSummary = upstreamArtifacts
           ? Object.entries(upstreamArtifacts).map(([n, p]) => `[${n}] ${p}`).join('\n')
@@ -411,8 +310,6 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
         const existingChildId = childIdByNode.get(name)
         let result: { output: Array<{ type: string; text?: string }>; stopReason: string }
-        // 实时活动桥接（步骤 3）：订阅 child session 活动 → emit graph/node-activity
-        let disposeActivity: (() => void) | undefined
 
         try {
           let activeChildId: string
@@ -453,19 +350,39 @@ export function createStateGraph<T extends Record<string, unknown>>(
             })
           }
 
-          // ★ 步骤3：订阅 child 实时活动 → 转发 graph/node-activity（看板可见 💭/🔧/✓/💬）
-          disposeActivity = bridgeSubagentActivity(nodeCtx.ctx, activeChildId, (activity) => {
-            nodeCtx.emit({
-              type: 'graph/node-activity',
-              graphId: nodeCtx.graphId,
-              node: name,
-              timestamp: Date.now(),
-              data: { childId: activeChildId, ...activity },
-            })
+          // ★ 步骤3：新 waiter 订阅活动 → 转发 graph/node-activity / idle-warning / loop-detected
+          // （问题三 A3：无硬超时；A4/A5：中止 → interrupt；D2/D3：循环/空闲仅提示）
+          result = await waitForSubagentEnd(nodeCtx.ctx, activeChildId, {
+            ...(signal !== undefined ? { signal } : {}),
+            parentAgent: agent, // 关键：父 Agent 作 interrupt authority（A5）
+            onActivity: (activity) => {
+              nodeCtx.emit({
+                type: 'graph/node-activity',
+                graphId: nodeCtx.graphId,
+                node: name,
+                timestamp: Date.now(),
+                data: { childId: activeChildId, ...activity },
+              })
+            },
+            onIdleWarning: (idleMs) => {
+              nodeCtx.emit({
+                type: 'graph/node-idle-warning',
+                graphId: nodeCtx.graphId,
+                node: name,
+                timestamp: Date.now(),
+                data: { childId: activeChildId, idleMs },
+              })
+            },
+            onLoopDetected: (tool, repeatCount) => {
+              nodeCtx.emit({
+                type: 'graph/node-loop-detected',
+                graphId: nodeCtx.graphId,
+                node: name,
+                timestamp: Date.now(),
+                data: { childId: activeChildId, tool, repeatCount },
+              })
+            },
           })
-
-          // 等待子代理 turn 完成（subagent/end 事件驱动）
-          result = await waitForSubagentEnd(nodeCtx.ctx, activeChildId, signal)
         } catch (error) {
           // 问题 2 定位日志②：start 抛错（区分"没调到 delegate"）
           logger.error('weave-addsubagent', '子代理启动/执行抛错', error instanceof Error ? error : new Error(String(error)), {
@@ -474,8 +391,6 @@ export function createStateGraph<T extends Record<string, unknown>>(
             elapsedMs: Date.now() - startAt,
           })
           throw error
-        } finally {
-          disposeActivity?.() // 节点结束，取消活动订阅
         }
 
         const text = result.output.map((b) => (b.type === 'text' ? b.text : '')).join('\n').trim()
@@ -878,6 +793,21 @@ export function createStateGraph<T extends Record<string, unknown>>(
           current = next
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error))
+          // ★ 问题三 B1/A4+A5：用户暂停（PauseError）→ emit graph/paused（不是失败）
+          if (error instanceof PauseError) {
+            emit({
+              type: 'graph/paused',
+              graphId,
+              node: current,
+              timestamp: Date.now(),
+              data: { reason: 'user-pause', childId: error.childId, resumeFrom: current },
+            })
+            clearGraphControl(graphId)
+            return {
+              graphId, success: true, finalState: state, trajectory, iterations: iteration,
+              data: { paused: true, reason: 'user-pause', resumeFrom: current },
+            }
+          }
           // ★ 问题五修复3：错误分类 → 需人工介入 → 暂停快照 + 通知（不再只发 node-error）
           const classification = classifyError(err)
           if (classification.needsUserIntervention && artifactsRoot) {
