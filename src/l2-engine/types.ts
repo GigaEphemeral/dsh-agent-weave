@@ -81,6 +81,7 @@ export interface TrajectoryEvent {
     | 'graph/checkpoint-written'
     | 'graph/loop-iteration'
     | 'graph/observer-signal'  // P4.B.7：观察者信号
+    | 'graph/node-activity'    // 子代理实时活动（tool-call/result/assistant）
   graphId: string
   /** 关联节点（graph/start、graph/end、graph/error 可为空）。 */
   node?: string

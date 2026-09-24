@@ -28,6 +28,7 @@ export const WsEventSchema = z.object({
     'loop-iteration', 'checkpoint-written',
     'observer-signal', 'agent-message',
     'approval-request', 'approval-decided', 'graph-end',
+    'node-activity',
   ]),  node: z.string().optional(),
   timestamp: z.number(),
   data: z.record(z.string(), z.unknown()).default({}),
@@ -45,6 +46,7 @@ export function mapEventType(type: TrajectoryEvent['type']): WsEvent['event_type
     case 'graph/loop-iteration': return 'loop-iteration'
     case 'graph/checkpoint-written': return 'checkpoint-written'
     case 'graph/observer-signal': return 'observer-signal'
+    case 'graph/node-activity': return 'node-activity'
     case 'graph/end': return 'graph-end'
     default: return 'graph-end' // graph/error → graph-end（保守）
   }

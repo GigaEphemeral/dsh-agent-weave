@@ -71,20 +71,30 @@ function waitForSubagentEnd(
   return new Promise((resolve) => {
     let done = false
     let timer: NodeJS.Timeout | null = null
+    let dispose: (() => void) | undefined
+
     const finish = (info?: SubagentEndLike): void => {
       if (done) return
       done = true
       if (timer) clearTimeout(timer)
-      ;(ctx as unknown as { off(name: string, cb: (info: SubagentEndLike) => void): void }).off('subagent/end', onEnd)
+      dispose?.() // ★ 用 ctx.on 返回的 disposer 取消订阅（ctx.off 未 inject 会崩溃）
       resolve({
         output: info?.lastAssistantMessage ?? [],
         stopReason: info?.stopReason ?? 'completed',
       })
     }
+
     const onEnd = (info: SubagentEndLike): void => {
       if (info.id === childId) finish(info)
     }
-    ;(ctx as unknown as { on(name: string, cb: (info: SubagentEndLike) => void): void }).on('subagent/end', onEnd)
+    // ★ ctx.on 返回 disposer 函数（不访问 ctx.off）。
+    // ★ 关键：subagent/start|end 是 scoped 事件（按 delegating parent 载体分发），
+    //   必须传 { global: true } 才能全局收到（invariant.ts 同款用法）。
+    const ret = (ctx as unknown as {
+      on(name: string, cb: (info: SubagentEndLike) => void, options?: { global?: boolean }): (() => void) | void
+    }).on('subagent/end', onEnd, { global: true })
+    if (typeof ret === 'function') dispose = ret
+
     timer = setTimeout(() => {
       logger.warn('weave-addsubagent', '等待 subagent/end 超时，返回空 output', {
         childId,
@@ -103,6 +113,95 @@ function buildFeedbackFromState(state: Record<string, unknown>, node: string): s
   return `[工作流反馈] 节点 ${node} 需要你基于上下文继续处理。\n` +
     `上游状态：messages=${messages.length} 条。\n` +
     `请根据已有工作继续，不要从头开始。${last?.stopReason ? `（上次 stopReason: ${last.stopReason}）` : ''}`
+}
+
+/** 子代理实时活动（看板展示用）。 */
+export interface SubagentActivity {
+  kind: 'thinking' | 'tool-call' | 'tool-result' | 'assistant'
+  tool?: string
+  args?: string
+  result?: string
+  text?: string
+}
+
+/**
+ * 订阅一个 durable child 的 session 实时活动（session/event 是 Scoped 事件，
+ * 需 { global: true } 全局监听；按 session.id 过滤）。
+ * 返回取消订阅函数。
+ */
+function bridgeSubagentActivity(
+  ctx: Context,
+  childId: string,
+  onActivity: (activity: SubagentActivity) => void,
+): () => void {
+  const c = ctx as unknown as {
+    on(
+      name: string,
+      cb: (session: { id?: string }, event: { type?: string; data?: Record<string, unknown> }) => void,
+      options?: { global?: boolean },
+    ): (() => void) | void
+  }
+  const dispose = c.on('session/event', (session, event) => {
+    if (session?.id !== childId) return
+    const data = event.data ?? {}
+    switch (event.type) {
+      case 'tool/call': {
+        const name = typeof data.name === 'string' ? data.name : typeof data.tool === 'string' ? data.tool : 'tool'
+        onActivity({
+          kind: 'tool-call',
+          tool: name,
+          args: safeJsonSnippet(data.arguments ?? data.input ?? data.params, 300),
+        })
+        break
+      }
+      case 'tool/result':
+        onActivity({
+          kind: 'tool-result',
+          tool: typeof data.tool === 'string' ? data.tool : 'tool',
+          result: safeJsonSnippet(data.output ?? data.value ?? data.content, 300),
+        })
+        break
+      case 'assistant/message': {
+        const blocks = data.message ?? data.content
+        const text = extractText(blocks)
+        if (text) onActivity({ kind: 'assistant', text })
+        break
+      }
+      case 'assistant/attempt': {
+        const text = extractText(data.message ?? data.content)
+        if (text) onActivity({ kind: 'thinking', text })
+        break
+      }
+      default:
+        break
+    }
+  }, { global: true })
+  return typeof dispose === 'function' ? dispose : () => {}
+}
+
+/** 安全截断 JSON 片段（长参数/结果只取前 300 字符）。 */
+function safeJsonSnippet(value: unknown, max = 300): string {
+  let s: string
+  try {
+    s = typeof value === 'string' ? value : JSON.stringify(value)
+  } catch {
+    s = String(value)
+  }
+  return s.length > max ? `${s.slice(0, max)}…` : s
+}
+
+/** 从 ContentBlock 数组提取文本。 */
+function extractText(blocks: unknown): string {
+  if (Array.isArray(blocks)) {
+    return blocks
+      .map((b) => {
+        const blk = b as { type?: string; text?: string }
+        return blk?.type === 'text' ? blk.text ?? '' : ''
+      })
+      .join('\n')
+      .trim()
+  }
+  return ''
 }
 
 /** 轨迹事件 → ledger 事件类型映射（P1-1）。 */
@@ -308,63 +407,71 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
         const existingChildId = childIdByNode.get(name)
         let result: { output: Array<{ type: string; text?: string }>; stopReason: string }
+        // 实时活动桥接（步骤 3）：订阅 child session 活动 → emit graph/node-activity
+        let disposeActivity: (() => void) | undefined
 
-        if (!existingChildId) {
-          // 首次激活：startContinuable 建 durable child（问题三最小版）
-          try {
+        try {
+          let activeChildId: string
+          if (!existingChildId) {
+            // 首次激活：startContinuable 建 durable child（问题三最小版）
             const started = await nodeCtx.ctx.subagents.startContinuable({
               provider: options.provider,
               label: `${name}（${options.provider}）`,
               request: {
                 prompt: [{ type: 'text', text: prompt }],
                 parent: agent as never,
-                ...(options.role !== undefined ? { label: `${name}（${options.provider}）` } : {}),
               },
               signal: signal ?? new AbortController().signal,
             })
             childIdByNode.set(name, started.childId)
+            activeChildId = started.childId
             // 问题 2 定位日志③：continuable 创建成功（childId 持久化）
             logger.info('weave-addsubagent', 'startContinuable 返回', {
               node: name,
               provider: options.provider,
-              childId: started.childId,
+              childId: activeChildId,
               elapsedMs: Date.now() - startAt,
             })
-            // 等待初始 turn 完成（subagent/end 事件驱动；这里用生命周期事件等待）
-            result = await waitForSubagentEnd(nodeCtx.ctx, started.childId, signal)
-          } catch (error) {
-            // 问题 2 定位日志②：startContinuable 抛错（区分"没调到 delegate"）
-            logger.error('weave-addsubagent', 'startContinuable() 抛错', error instanceof Error ? error : new Error(String(error)), {
-              node: name,
-              provider: options.provider,
-              elapsedMs: Date.now() - startAt,
-            })
-            throw error
-          }
-        } else {
-          // 循环回退/后续激活：sendMessage 追加反馈（问题三预留；MVP-4 最小版仅创建）
-          // 注：sendMessage 单向投递，结果经 subagent/end 事件异步返回，见 waitForSubagentEnd
-          const feedback = buildFeedbackFromState(state, name)
-          try {
+          } else {
+            // 循环回退/后续激活：sendMessage 追加反馈（保留记忆复用同一 child）
+            const feedback = buildFeedbackFromState(state, name)
             await nodeCtx.ctx.subagents.sendMessage(
               agent as never,
               existingChildId as never, // SessionId 品牌类型由运行期保证
               [{ type: 'text', text: feedback }],
               { signal: signal ?? new AbortController().signal },
             )
+            activeChildId = existingChildId
             logger.info('weave-addsubagent', 'sendMessage 反馈已投递', {
               node: name,
               childId: existingChildId,
               feedbackLen: feedback.length,
             })
-            result = await waitForSubagentEnd(nodeCtx.ctx, existingChildId, signal)
-          } catch (error) {
-            logger.error('weave-addsubagent', 'sendMessage 失败', error instanceof Error ? error : new Error(String(error)), {
-              node: name,
-              childId: existingChildId,
-            })
-            throw error
           }
+
+          // ★ 步骤3：订阅 child 实时活动 → 转发 graph/node-activity（看板可见 💭/🔧/✓/💬）
+          disposeActivity = bridgeSubagentActivity(nodeCtx.ctx, activeChildId, (activity) => {
+            nodeCtx.emit({
+              type: 'graph/node-activity',
+              graphId: nodeCtx.graphId,
+              node: name,
+              timestamp: Date.now(),
+              data: { childId: activeChildId, ...activity },
+            })
+          })
+
+          // 等待子代理 turn 完成（subagent/end 事件驱动）
+          result = await waitForSubagentEnd(nodeCtx.ctx, activeChildId, signal)
+        } catch (error) {
+          // 问题 2 定位日志②：start 抛错（区分"没调到 delegate"）
+          logger.error('weave-addsubagent', '子代理启动/执行抛错', error instanceof Error ? error : new Error(String(error)), {
+            node: name,
+            provider: options.provider,
+            elapsedMs: Date.now() - startAt,
+          })
+          throw error
+        } finally {
+          disposeActivity?.() // 节点结束，取消活动订阅
         }
 
         const text = result.output.map((b) => (b.type === 'text' ? b.text : '')).join('\n').trim()
