@@ -156,4 +156,28 @@ describe('P3.A.1 + 问题三 addSubagent（continuable）', () => {
     expect(r.success).toBe(true)
     expect(calls[0]?.signal).toBe(ctrl.signal) // 同一 signal 对象
   })
+
+  it('ui修复2：requiredProduces 缺失 → 节点失败（必交文档校验）', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'weave-produces-'))
+    try {
+      const { ctx } = mockCtx()
+      const g = createStateGraph<Record<string, unknown>>(ctx, 25, 8, root)
+      g.addSubagent('dev', {
+        provider: 'R6-developer',
+        artifactName: 'main.py',
+        requiredProduces: [{ kind: 'code', name: 'main.py' }, { kind: 'doc', name: 'acceptance.md' }],
+      })
+      const r = await g.run({ messages: [] } as Record<string, unknown>, {
+        checkpoint: async () => {},
+        ...RO,
+        agent: fakeAgent as never,
+      })
+      // main.py 已产出，acceptance.md 缺失 → 失败
+      expect(r.success).toBe(false)
+      expect(r.error?.message).toContain('必交文档')
+      expect(r.error?.message).toContain('acceptance.md')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

@@ -19,6 +19,7 @@ import {
   NODE_H,
   COL_X,
   ROW_Y,
+  type EditorEdge,
   type EditorNode,
 } from './canvas-model'
 
@@ -28,6 +29,9 @@ interface RoleDrop {
   id: string
   name: string
   suggests_next?: Array<{ roleRef: string; label?: string; reason?: string }>
+  produces?: Array<{ kind: string; name: string; contract?: string }>
+  capabilities?: string[]
+  tools?: string[]
 }
 
 interface Props {
@@ -47,11 +51,18 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
       y: Math.floor(i / 3) * (NODE_H + ROW_Y),
     })),
   )
-  const [edges, setEdges] = useState<Array<{ from: string; to: string }>>(() =>
-    (initialGraph?.edges ?? []).filter((e) => e.type === 'seq').map((e) => ({ from: e.from, to: e.to })),
+  const [edges, setEdges] = useState<EditorEdge[]>(() =>
+    (initialGraph?.edges ?? []).filter((e) => e.type === 'seq' || e.type === 'cond' || e.type === 'loop').map((e, i) => ({
+      id: `e-${i}-${e.from}-${e.to}`,
+      from: e.from,
+      to: e.to,
+      type: (e.type === 'cond' || e.type === 'loop' ? e.type : 'seq') as EditorEdge['type'],
+      ...(e.when !== undefined ? { when: e.when } : {}),
+      ...(e.maxIter !== undefined ? { maxIter: e.maxIter } : {}),
+    })),
   )
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [roles, setRoles] = useState<Array<{ id: string; name: string }>>([])
+  const [roles, setRoles] = useState<Array<RoleDrop>>([])
   const [suggestion, setSuggestion] = useState<{ sourceId: string; items: Array<{ roleRef: string; label?: string; reason?: string }> } | null>(null)
   const [counter, setCounter] = useState(initialGraph?.nodes.length ?? 0)
 
@@ -59,7 +70,7 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
   useEffect(() => {
     fetch('/api/weave/roles')
       .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setRoles(Array.isArray(d) ? (d as Array<{ id: string; name: string }>) : []))
+      .then((d) => setRoles(Array.isArray(d) ? (d as RoleDrop[]) : []))
       .catch(() => setRoles([]))
   }, [])
 
@@ -88,15 +99,27 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
 
   const positioned = useMemo(() => layoutNodes(nodes, edges), [nodes, edges])
 
-  const emit = (ns: EditorNode[], es: Array<{ from: string; to: string }>): void => {
+  const emit = (ns: EditorNode[], es: EditorEdge[]): void => {
     onGraphChange?.(buildGraphSpec(ns, es))
   }
 
   const openNodeEditor = (id: string): void => {
     const target = positioned.find((n) => n.id === id)
     if (!target) return
+    const role = roles.find((r) => r.id === target.roleRef)
     window.dispatchEvent(new CustomEvent('weave:open-node-editor', {
-      detail: { nodeId: id, node: target, roles },
+      detail: {
+        nodeId: id,
+        node: target,
+        roles,
+        roleDefault: role
+          ? {
+              produces: role.produces,
+              capabilities: role.capabilities,
+              tools: role.tools,
+            }
+          : undefined,
+      },
     }))
   }
 
@@ -113,7 +136,7 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
       x: (idx % 3) * (NODE_W + COL_X),        // ★ 修复：网格铺开
       y: Math.floor(idx / 3) * (NODE_H + ROW_Y),
     }]
-    const es = [...edges, { from: sourceId, to: id }]
+    const es: EditorEdge[] = [...edges, { id: `e-${counter}-${sourceId}-${id}`, from: sourceId, to: id, type: 'seq' }]
     setNodes(ns)
     setEdges(es)
     setCounter(counter + 1)
@@ -121,15 +144,8 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
     emit(ns, es)
   }
 
+  // P0：删隐式连边——点击只选中，连边走端口拖出（P2）
   const selectNode = (id: string): void => {
-    if (selectedId && selectedId !== id) {
-      if (readonly) { setSelectedId(id); return }
-      const es = [...edges, { from: selectedId, to: id }]
-      setEdges(es)
-      emit(nodes, es)
-      setSelectedId(id)
-      return
-    }
     setSelectedId(id === selectedId ? null : id)
   }
 
@@ -171,25 +187,42 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
 
   return (
     <div style={{ position: 'relative', width: '100%', minHeight: 260, height: '100%', border: '1px dashed #ccc', borderRadius: 8, background: '#fafafa', overflow: 'hidden' }}>
-      {/* MVP-5 Phase D：边流动画 */}
+      {/* MVP-5 Phase D：边流动画（seq 虚线流动；cond 蓝实线；loop 橙弧线+maxIter 标签） */}
       <style>{'@keyframes weave-edge-flow { to { stroke-dashoffset: -12; } }'}</style>
       <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-        {edges.map((e, i) => {
+        {edges.map((e) => {
           const a = positioned.find((n) => n.id === e.from)
           const b = positioned.find((n) => n.id === e.to)
           if (!a || !b) return null
+          const x1 = a.x + NODE_W / 2
+          const y1 = a.y + NODE_H / 2
+          const x2 = b.x + NODE_W / 2
+          const y2 = b.y + NODE_H / 2
+          const isLoop = e.type === 'loop'
+          const isCond = e.type === 'cond'
           return (
-            <line
-              key={i}
-              x1={a.x + NODE_W / 2}
-              y1={a.y + NODE_H / 2}
-              x2={b.x + NODE_W / 2}
-              y2={b.y + NODE_H / 2}
-              stroke="#94a3b8"
-              strokeWidth={1.5}
-              strokeDasharray="6 4"
-              style={{ animation: 'weave-edge-flow 1s linear infinite' }}
-            />
+            <g key={e.id}>
+              <line
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                stroke={isLoop ? '#f59e0b' : isCond ? '#3b82f6' : '#94a3b8'}
+                strokeWidth={isLoop || isCond ? 2 : 1.5}
+                strokeDasharray={isLoop ? undefined : '6 4'}
+                style={!isLoop && !isCond ? { animation: 'weave-edge-flow 1s linear infinite' } : undefined}
+              />
+              {isLoop && e.maxIter !== undefined && (
+                <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 6} fill="#b45309" fontSize={10}>
+                  loop ×{e.maxIter}
+                </text>
+              )}
+              {isCond && e.when && (
+                <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 6} fill="#1d4ed8" fontSize={10}>
+                  {e.when}
+                </text>
+              )}
+            </g>
           )
         })}
       </svg>

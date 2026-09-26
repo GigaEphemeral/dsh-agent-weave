@@ -111,6 +111,8 @@ export function compileRoleProfile(role: RoleDefinition, options: CompileOptions
       ...(role.order !== undefined ? { order: role.order } : {}),
       ...(role.tags !== undefined ? { tags: [...role.tags] } : {}),
       ...(role.suggests_next !== undefined ? { suggests_next: role.suggests_next } : {}),
+      ...(role.produces !== undefined ? { produces: role.produces } : {}),
+      ...(role.input !== undefined ? { input: role.input } : {}),
     },
   }
 }

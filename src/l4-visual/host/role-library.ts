@@ -10,7 +10,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { dump as yamlDump } from 'js-yaml'
 import { loadRoleDefinitions } from '../../l3-roles/role-loader.js'
-import { RoleDefinitionSchema, RoleSchemaError, type RoleDefinition } from '../../shared/types.js'
+import { RoleDefinitionSchema, RoleSchemaError, type RoleDefinition, type RoleConsumeItem } from '../../shared/types.js'
 
 let rolesDir: string | null = null
 
@@ -36,6 +36,10 @@ export interface RoleLibraryEntry {
   tags: string[]
   suggests_next?: RoleDefinition['suggests_next'] | undefined
   tools: string[]
+  /** ui修复2：产出清单（produces）。 */
+  produces?: RoleDefinition['produces'] | undefined
+  /** ui修复2：输入声明（consumes/requires）。 */
+  input?: RoleDefinition['input'] | undefined
 }
 
 /** 将 RoleDefinition 转为角色库展示条目。 */
@@ -48,6 +52,8 @@ export function toRoleEntry(role: RoleDefinition): RoleLibraryEntry {
     tags: role.tags ?? [],
     ...(role.suggests_next !== undefined ? { suggests_next: role.suggests_next } : {}),
     tools: [...role.tools],
+    ...(role.produces !== undefined ? { produces: role.produces } : {}),
+    ...(role.input !== undefined ? { input: role.input } : {}),
   }
 }
 
@@ -100,6 +106,12 @@ export interface RoleFormInput {
   forbidExtensions?: string[]
   requiredSections?: string[]
   forbidden?: string[]
+  /** ui修复2：产出清单。 */
+  produces?: RoleDefinition['produces']
+  /** ui修复2：消费清单。 */
+  consumes?: RoleConsumeItem[]
+  /** ui修复2：推荐下一步。 */
+  suggestsNext?: RoleDefinition['suggests_next']
 }
 
 export interface SaveRoleResult {
@@ -143,6 +155,13 @@ function buildRoleDefinition(form: RoleFormInput): RoleDefinition {
           },
         }
       : {}),
+    ...(form.produces !== undefined && form.produces.length > 0 ? { produces: form.produces } : {}),
+    ...(form.consumes !== undefined && form.consumes.length > 0
+      ? { input: { requires: form.inputRequires ?? [], consumes: form.consumes } }
+      : form.inputRequires !== undefined && form.inputRequires.length > 0
+        ? { input: { requires: form.inputRequires, consumes: [] } }
+        : {}),
+    ...(form.suggestsNext !== undefined && form.suggestsNext.length > 0 ? { suggests_next: form.suggestsNext } : {}),
   }
 }
 

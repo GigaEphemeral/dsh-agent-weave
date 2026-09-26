@@ -496,4 +496,33 @@ export const BOARD_CSS = `
   cursor: pointer;
   flex: 0 0 auto;
 }
+
+/* ══════════════════════════════════════════════════════════
+   ui修复2 §P1：I/O 编辑 / 覆盖徽章 / 能力网格
+   ══════════════════════════════════════════════════════════ */
+.io-editor { display: flex; flex-direction: column; gap: 8px; }
+.inherit-toggle { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: var(--w-bg-mute); border-radius: 8px; }
+.io-list { display: flex; flex-direction: column; gap: 6px; }
+.io-row { display: flex; gap: 6px; align-items: center; }
+.io-row input, .io-row select {
+  padding: 5px 8px; border: 1px solid var(--w-border); border-radius: 6px;
+  font-size: 12px; flex: 1; min-width: 0;
+}
+.io-row select { flex: 0 0 90px; }
+.io-remove {
+  border: none; background: none; color: var(--w-danger); cursor: pointer;
+  font-size: 15px; padding: 2px 6px; flex: 0 0 auto;
+}
+.io-add {
+  align-self: flex-start; border: 1px dashed var(--w-border-strong); background: none;
+  color: var(--w-text-2); border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+}
+.io-empty { color: var(--w-text-3); font-size: 12px; }
+.cap-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; }
+.override-badge {
+  font-size: 10px; font-weight: 600; color: var(--w-brand);
+  background: var(--w-brand-soft); border: 1px solid var(--w-brand-border);
+  border-radius: 10px; padding: 1px 8px;
+}
+.override-hint { font-size: 10px; font-weight: 500; color: var(--w-text-3); }
 `

@@ -28,6 +28,7 @@ import { registerGraph } from '../l4-visual/host/spec-registry.js'
 import { getGlobalTokens } from '../l4-visual/host/visual-runtime.js'
 import { createRunLedger, type RunLedger } from '../l5-observability/run-ledger.js'
 import { loadRoleDefinitions } from '../l3-roles/role-loader.js'
+import { effectiveRole } from '../l4-visual/host/effective-role.js'
 import type { GraphDefinitionSpec } from '../l2-engine/types.js'
 
 /** 全局 RunLedger（消息流桥接 + 审计；惰性创建）。 */
@@ -94,21 +95,29 @@ export async function runGraphRealTool(
   for (const node of spec.nodes) {
     if (node.nodeType === 'role' && node.roleRef) {
       const role = roles.find((r) => r.id === node.roleRef)
+      // ui修复2：节点覆盖 → effectiveRole 合并（能力只能减不能加；produces/consumes 三态）
+      const eff = node.override !== undefined && role ? effectiveRole(role, node.override) : role
+      // ui修复2：节点覆盖的 inputGate 优先于图 DSL inputGate
+      const nodeInputGate = node.override?.inputGate
+        ? { requires: node.override.inputGate }
+        : node.inputGate
       graph.addSubagent(node.id, {
         provider: node.roleRef,
         // P4.0.6：artifactName 支持（缺省 <nodeId>.md）
         artifactName: node.artifactName ?? `${node.id}.md`,
         role: node.roleRef,
         ...(node.promptTemplate !== undefined ? { promptTemplate: node.promptTemplate } : {}),
-        ...(role && role.quality_gate.length > 0 ? { qualityGate: role.quality_gate } : {}),
-        // 问题三 D1：透传 inputGate（图 DSL 节点可配置）
-        ...(node.inputGate !== undefined ? { inputGate: node.inputGate } : {}),
+        ...(eff && eff.quality_gate.length > 0 ? { qualityGate: eff.quality_gate } : {}),
+        // 问题三 D1：透传 inputGate（图 DSL 节点可配置；ui修复2 覆盖优先）
+        ...(nodeInputGate !== undefined ? { inputGate: nodeInputGate } : {}),
         // MVP-5 问题 2：Environment Gate（角色 YAML environment.preflight）
-        ...(role && role.environment && role.environment.preflight.length > 0
-          ? { environmentPreflight: role.environment.preflight }
+        ...(eff && eff.environment && eff.environment.preflight.length > 0
+          ? { environmentPreflight: eff.environment.preflight }
           : {}),
         // MVP-5 问题 1/3：Output Gate（角色 YAML output 约束）
-        ...(role && role.output ? { outputGate: role.output } : {}),
+        ...(eff && eff.output ? { outputGate: eff.output } : {}),
+        // ui修复2：节点覆盖的产物清单（引擎产出校验用）
+        ...(eff?.produces !== undefined && eff.produces.length > 0 ? { requiredProduces: eff.produces } : {}),
       })
     } else if (node.nodeType === 'approval') {
       graph.addApprovalGate(node.id, {

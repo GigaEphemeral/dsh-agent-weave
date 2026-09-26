@@ -236,6 +236,16 @@ export interface GraphNodeSpec {
     requires: string[]
     requiresAny?: string[]
   }
+  /** ui修复2：节点级覆盖（能力只能减不能加；produces/consumes 三态）。 */
+  override?: {
+    produces?: Array<{ kind: string; name: string; contract?: string }>
+    consumes?: Array<{ kind: string; name: string; from?: string }>
+    capabilities?: string[]
+    tools?: string[]
+    inputGate?: string[]
+    approval?: boolean
+    promptTemplate?: string
+  }
 }
 
 /** 图边规格。 */

@@ -13,7 +13,16 @@ import { NodeEditorModal } from '../dashboard/NodeEditorModal.js'
 import type { EditorNode } from '../dashboard/canvas-model.js'
 
 interface RoleEditorState { roleId?: string }
-interface NodeEditorState { nodeId: string; node: EditorNode; roles: Array<{ id: string; name: string }> }
+interface NodeEditorState {
+  nodeId: string
+  node: EditorNode
+  roles: Array<{ id: string; name: string }>
+  roleDefault?: {
+    produces?: Array<{ kind: string; name: string; contract?: string }>
+    capabilities?: string[]
+    tools?: string[]
+  }
+}
 
 export function BoardOverlays() {
   const [roleEditor, setRoleEditor] = useState<RoleEditorState | null>(null)
@@ -50,6 +59,7 @@ export function BoardOverlays() {
         <NodeEditorModal
           node={nodeEditor.node}
           roles={nodeEditor.roles}
+          {...(nodeEditor.roleDefault !== undefined ? { roleDefault: nodeEditor.roleDefault } : {})}
           onClose={() => setNodeEditor(null)}
           onSave={(updated) => {
             window.dispatchEvent(new CustomEvent('weave:node-saved', { detail: { nodeId: nodeEditor.nodeId, node: updated } }))

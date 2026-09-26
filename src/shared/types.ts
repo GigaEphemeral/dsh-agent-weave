@@ -82,6 +82,57 @@ export const RoleOutputGateSchema = z.object({
   forbidden_content_patterns: z.array(z.string()).optional(),
 })
 
+/** 产出项（ui修复2：output.produces；供节点级覆盖与产物校验）。 */
+export interface RoleProduceItem {
+  kind: 'doc' | 'code' | 'test' | 'script' | 'config' | 'data'
+  name: string
+  contract?: string | undefined
+}
+
+export const RoleProduceItemSchema = z.object({
+  kind: z.enum(['doc', 'code', 'test', 'script', 'config', 'data']),
+  name: z.string().min(1),
+  contract: z.string().optional(),
+})
+
+/** 消费项（ui修复2：input.consumes；声明消费的上游产物）。 */
+export interface RoleConsumeItem {
+  kind: string
+  name: string
+  from?: string | undefined
+}
+
+export const RoleConsumeItemSchema = z.object({
+  kind: z.string(),
+  name: z.string().min(1),
+  from: z.string().optional(),
+})
+
+/** 角色输入声明（ui修复2：requires 上游依赖 + consumes 消费产物）。 */
+export interface RoleInputDecl {
+  requires: string[]
+  consumes: RoleConsumeItem[]
+}
+
+export const RoleInputDeclSchema = z.object({
+  requires: z.array(z.string()).default([]),
+  consumes: z.array(RoleConsumeItemSchema).default([]),
+}).optional()
+
+/** 角色输出声明（ui修复2：produces 产出清单 + 约束）。 */
+export interface RoleOutputDecl extends RoleOutputGate {
+  produces: RoleProduceItem[]
+  requiredSections?: string[] | undefined
+}
+
+export const RoleOutputDeclSchema = z.object({
+  produces: z.array(RoleProduceItemSchema).default([]),
+  only_markdown: z.boolean().optional(),
+  forbidden_extensions: z.array(z.string()).optional(),
+  forbidden_content_patterns: z.array(z.string()).optional(),
+  requiredSections: z.array(z.string()).optional(),
+}).optional()
+
 /** 角色定义（从 YAML 加载后经 Zod 校验）。 */
 export interface RoleDefinition {
   schema_version: string
@@ -127,6 +178,10 @@ export interface RoleDefinition {
   environment?: RoleEnvironment | undefined
   /** MVP-5 问题 1/3：输出约束（可选）。 */
   output?: RoleOutputGate | undefined
+  /** ui修复2：输入声明（requires/consumes）。 */
+  input?: RoleInputDecl | undefined
+  /** ui修复2：产出清单（produces，可含 contract）。 */
+  produces?: RoleProduceItem[] | undefined
 }
 
 export const RoleDefinitionSchema = z.object({
@@ -169,6 +224,8 @@ export const RoleDefinitionSchema = z.object({
   observers: z.array(ObserverConfigSchema).optional(),
   environment: RoleEnvironmentSchema.optional(),
   output: RoleOutputGateSchema.optional(),
+  input: RoleInputDeclSchema,
+  produces: z.array(RoleProduceItemSchema).optional(),
 })
 
 /** RoleDefinition 的 Zod 推断类型（与 interface 保持一致的双重校验出口）。 */
@@ -224,6 +281,10 @@ export interface RoleProfile {
     order?: number | undefined
     tags?: string[] | undefined
     suggests_next?: RoleDefinition['suggests_next']
+    /** ui修复2：产出清单（produces）。 */
+    produces?: RoleDefinition['produces']
+    /** ui修复2：输入声明（consumes/requires）。 */
+    input?: RoleDefinition['input']
   }
 }
 

@@ -7,8 +7,8 @@
 export interface ClientGraphSpec {
   entryPoint: string
   maxIterations?: number
-  nodes: Array<{ id: string; roleRef?: string; nodeType: string; artifactName?: string; inputGate?: { requires: string[] } }>
-  edges: Array<{ from: string; to: string; type: string }>
+  nodes: Array<{ id: string; roleRef?: string; nodeType: string; artifactName?: string; inputGate?: { requires: string[] }; override?: unknown }>
+  edges: Array<{ from: string; to: string; type: string; when?: string; maxIter?: number }>
 }
 
 /** 执行快照（对应 event-bus ExecutionSnapshot 的 JSON 序列化）。 */

@@ -8,6 +8,8 @@
  * 保存：POST /api/weave/roles（§5.3，宿主写 roles/<id>.yaml）
  */
 import { useEffect, useState } from 'react'
+import type { ProduceItem } from './canvas-model.js'
+import { IOEditor } from './shared/IOEditor.js'
 
 export interface ProviderInfo {
   id: string
@@ -40,6 +42,8 @@ interface RoleFormData {
   forbidExtensions: string
   requiredSections: string
   forbidden: string
+  /** ui修复2：产出清单。 */
+  produces: ProduceItem[] | undefined
 }
 
 const BLANK: RoleFormData = {
@@ -47,6 +51,7 @@ const BLANK: RoleFormData = {
   provider: '', model: '', capabilities: [], tools: [],
   readable: '', inputRequires: '', onlyMarkdown: true,
   forbidExtensions: '', requiredSections: '', forbidden: '',
+  produces: undefined,
 }
 
 function splitCsv(s: string): string[] {
@@ -101,6 +106,7 @@ export function RoleEditor({ roleId, onClose, onSaved }: RoleEditorProps) {
           capabilities: Array.isArray(hit.capabilities) ? (hit.capabilities as string[]).map(String) : [],
           tools: Array.isArray(hit.tools) ? (hit.tools as string[]).map(String) : [],
           readable: '', inputRequires: '', onlyMarkdown: true, forbidExtensions: '', requiredSections: '', forbidden: '',
+          produces: Array.isArray(hit.produces) ? (hit.produces as ProduceItem[]) : undefined,
         })
       })
       .catch(() => {})
@@ -131,6 +137,7 @@ export function RoleEditor({ roleId, onClose, onSaved }: RoleEditorProps) {
           forbidExtensions: splitCsv(form.forbidExtensions),
           requiredSections: splitCsv(form.requiredSections),
           forbidden: splitCsv(form.forbidden),
+          produces: form.produces,
         }),
       })
       const d = (await r.json()) as { ok?: boolean; error?: string }
@@ -269,6 +276,12 @@ export function RoleEditor({ roleId, onClose, onSaved }: RoleEditorProps) {
             <input style={inputStyle} value={form.forbidExtensions} onChange={(e) => set({ forbidExtensions: e.target.value })} placeholder=".py,.ts,.html" />
             <label style={{ fontSize: 12, color: '#64748b' }}>必需章节（逗号分隔）</label>
             <input style={inputStyle} value={form.requiredSections} onChange={(e) => set({ requiredSections: e.target.value })} />
+          </div>
+
+          {/* ui修复2：产出清单（produces，角色默认） */}
+          <div style={sectionTitle()}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>产出清单（produces）</div>
+            <IOEditor value={form.produces} onChange={(produces) => set({ produces })} />
           </div>
 
           <div style={sectionTitle()}>

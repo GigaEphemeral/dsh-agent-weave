@@ -14,12 +14,16 @@ export interface RoleLibraryEntry {
   order?: number
   tags: string[]
   suggests_next?: Array<{ roleRef: string; label?: string; reason?: string }>
+  /** ui修复2：产出清单摘要。 */
+  produces?: Array<{ kind: string; name: string; contract?: string }>
 }
 
 export interface DraggableRole {
   id: string
   name: string
   suggests_next?: RoleLibraryEntry['suggests_next']
+  /** ui修复2：拖拽 payload 带 I/O（CanvasEditor 落点直接用）。 */
+  produces?: RoleLibraryEntry['produces']
 }
 
 export function RoleLibraryPanel({ readonly = false }: { readonly?: boolean }) {
@@ -86,7 +90,7 @@ export function RoleLibraryPanel({ readonly = false }: { readonly?: boolean }) {
             title={r.description ?? ''}
             draggable={!readonly}
             onDragStart={(e) => {
-              const payload: DraggableRole = { id: r.id, name: r.name, suggests_next: r.suggests_next }
+              const payload: DraggableRole = { id: r.id, name: r.name, suggests_next: r.suggests_next, produces: r.produces }
               e.dataTransfer.setData('application/weave-role', JSON.stringify(payload))
               e.dataTransfer.effectAllowed = 'copy'
             }}
@@ -106,6 +110,12 @@ export function RoleLibraryPanel({ readonly = false }: { readonly?: boolean }) {
             </div>
             {r.description && <div style={{ color: '#666' }}>{r.description}</div>}
             {r.tags.length > 0 && <div style={{ color: '#999' }}>{r.tags.join(' · ')}</div>}
+            {/* ui修复2：产出摘要 */}
+            {r.produces && r.produces.length > 0 && (
+              <div style={{ color: '#4f46e5', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                📤 {r.produces.map((p) => p.name).join(', ')}
+              </div>
+            )}
           </div>
         ))}
       </div>

@@ -191,6 +191,8 @@ export interface SubagentNodeOptions {
   environmentPreflight?: readonly PreflightCheck[]
   /** MVP-5 问题 1/3：Output Gate（角色职责越界扫描）。 */
   outputGate?: OutputGateOptions
+  /** ui修复2：节点覆盖要求的产物清单（节点完成后逐个校验存在）。 */
+  requiredProduces?: Array<{ kind: string; name: string; contract?: string | undefined }>
 }
 
 /** 引擎实例选项。 */
@@ -487,6 +489,17 @@ export function createStateGraph<T extends Record<string, unknown>>(
             const err = new Error('输出门禁未过（节点 ' + name + '）: ' + outputResult.failures.join('; '))
             logger.warn('weave-addsubagent', '输出门禁未过，节点失败（整图终止）', { node: name, failures: outputResult.failures })
             throw err
+          }
+          // ui修复2：requiredProduces 校验（节点覆盖要求的产物必须存在）
+          if (options.requiredProduces && options.requiredProduces.length > 0) {
+            const missing = options.requiredProduces
+              .filter((p) => !existsSync(join(nodeDir, p.name)))
+              .map((p) => p.name)
+            if (missing.length > 0) {
+              const err = new Error(`节点 ${name} 未产出必交文档: ${missing.join(', ')}（本项目覆盖要求）`)
+              logger.warn('weave-addsubagent', '必交文档缺失，节点失败', { node: name, missing })
+              throw err
+            }
           }
         }
         // 问题四修复1+2：质量门验证（产物空/数量不足 → 抛错 → 节点失败 → 整图停，不再继续空跑）
