@@ -41,9 +41,20 @@ interface Props {
   onGraphChange?: (spec: ClientGraphSpec) => void
   /** MVP-5B UI 重构：运行中只读（禁编辑）。 */
   readonly?: boolean
+  /** P4：运行时节点状态（nodeStates：running/completed/failed...）。 */
+  liveState?: Record<string, string>
+  /** P4：节点活动（头顶气泡）。 */
+  liveActivity?: Map<string, { text: string; icon?: string | undefined; at: number }>
 }
 
-export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: Props) {
+const NODE_STATUS_COLOR: Record<string, string> = {
+  running: '#eff6ff',
+  completed: '#ecfdf5',
+  failed: '#fef2f2',
+  waiting: '#fffbeb',
+}
+
+export function CanvasEditor({ initialGraph, onGraphChange, readonly = false, liveState, liveActivity }: Props) {
   const [nodes, setNodes] = useState<EditorNode[]>(() =>
     (initialGraph?.nodes ?? []).map((n, i) => ({
       id: n.id,
@@ -307,7 +318,10 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
         onDragLeave={() => setDropIndicator(null)}
         onDrop={onDrop}
       >
-        {positioned.map((n) => (
+        {positioned.map((n) => {
+          const status = liveState?.[n.id]
+          const act = liveActivity?.get(n.id)
+          return (
           <div
             key={n.id}
             data-node-id={n.id}
@@ -322,15 +336,16 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
               if (readonly) return
               openNodeEditor(n.id)
             }}
+            className={status ? `node status-${status}` : 'node'}
             style={{
               position: 'absolute',
               left: n.x,
               top: n.y,
               width: NODE_W,
               height: NODE_H,
-              border: selectedId === n.id ? '2px solid #3b82f6' : '1px solid #cbd5e1',
+              border: selectedId === n.id ? '2px solid #3b82f6' : status === 'running' ? '2px solid #f59e0b' : '1px solid #cbd5e1',
               borderRadius: 8,
-              background: '#fff',
+              background: status ? (NODE_STATUS_COLOR[status] ?? '#fff') : '#fff',
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'center',
@@ -338,6 +353,7 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
               cursor: 'pointer',
               boxShadow: '0 1px 3px rgba(0,0,0,.12)',
               fontSize: 12,
+              transition: 'background .2s, border-color .2s',
             }}
           >
             <strong>{n.roleName}</strong>
@@ -346,6 +362,22 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
             {n.approval && <span style={{ color: '#f59e0b' }}>✓ 需审批</span>}
             {n.override && Object.keys(n.override).length > 0 && (
               <span style={{ color: '#4f46e5' }}>⚡ 覆盖</span>
+            )}
+            {status === 'waiting' && <span style={{ color: '#b45309' }}>⏳ 等待依赖</span>}
+            {/* P4：头顶活动气泡 */}
+            {act?.text && (
+              <span
+                className="node-bubble"
+                style={{
+                  position: 'absolute', top: -20, left: 4, right: 4,
+                  background: 'rgba(15,23,42,.85)', color: '#fff',
+                  borderRadius: 6, padding: '1px 6px', fontSize: 10.5,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  pointerEvents: 'none',
+                }}
+              >
+                {act.icon ?? '💬'} {act.text}
+              </span>
             )}
             {!readonly && (
               <button
@@ -372,7 +404,8 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
               />
             )}
           </div>
-        ))}
+          )
+        })}
         {nodes.length === 0 && !readonly && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: 13 }}>
             从左侧角色库拖入角色，开始编排

@@ -9,11 +9,13 @@ import { SignalPanel } from '../../dashboard/SignalPanel.js'
 import { MessageFlowPanel } from '../../dashboard/MessageFlowPanel.js'
 import { ActivityStream } from '../ActivityStream.js'
 import { useGraphStream } from '../../hooks/useGraphStream.js'
+import { useActivityFeed } from '../../hooks/useActivityFeed.js'
 import type { CurrentTask } from '../../state/board-state.js'
 
 export function RuntimePane({ task }: { task: CurrentTask }) {
   const graphId = task.graphId
-  const { snap } = useGraphStream(graphId)
+  const { snap, spec } = useGraphStream(graphId)
+  const activity = useActivityFeed(graphId)
   const [showSecondary, setShowSecondary] = useState(false)
 
   // 图完成时显示横幅提示
@@ -40,19 +42,63 @@ export function RuntimePane({ task }: { task: CurrentTask }) {
 
       <div className="runtime-cards">
         <StatusCard snap={snap} />
+        <NodeActivityCard snap={snap} spec={spec} activity={activity} />
         <TokenPanel graphId={graphId} />
-        <ApprovalPanel graphId={graphId} />
       </div>
 
       <details className="runtime-details" open={showSecondary} onToggle={(e) => setShowSecondary((e.target as HTMLDetailsElement).open)}>
-        <summary>观察者信号 / 消息流</summary>
+        <summary>观察者信号 / 消息流 / 审批</summary>
         <div className="detail-grid">
           <SignalPanel graphId={graphId} />
           <MessageFlowPanel graphId={graphId} />
         </div>
       </details>
 
+      <ApprovalPanel graphId={graphId} />
       <ActivityStream graphId={graphId} />
+    </div>
+  )
+}
+
+/** P4：节点实时活动卡片（各节点状态 + 当前活动气泡摘要）。 */
+function NodeActivityCard({
+  snap, spec, activity,
+}: {
+  snap: ReturnType<typeof useGraphStream>['snap']
+  spec: ReturnType<typeof useGraphStream>['spec']
+  activity: ReturnType<typeof useActivityFeed>
+}) {
+  const states = snap?.nodeStates ?? {}
+  const ids = (spec?.nodes ?? []).map((n) => n.id)
+  const nodeRows = ids.length > 0
+    ? ids
+    : Object.keys(states)
+
+  const STATUS_LABEL: Record<string, string> = {
+    running: '运行中', completed: '完成', failed: '失败', waiting: '等待', idle: '待命',
+  }
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <span className="card-title">节点实时活动</span>
+        <span className="card-sub">{Object.values(states).filter((s) => s === 'running').length} 运行中</span>
+      </div>
+      <div className="card-body">
+        {nodeRows.length === 0 && <div className="pane-empty">（暂无节点）</div>}
+        {nodeRows.map((id) => {
+          const status = states[id] ?? 'idle'
+          const act = activity.get(id)
+          return (
+            <div key={id} className="node-activity-row">
+              <span className={`node-dot ${status}`} />
+              <span className="node-id">{id}</span>
+              <span className={`node-status ${status}`}>{STATUS_LABEL[status] ?? status}</span>
+              {act?.text && <span className="node-act-text">{act.icon ?? '💬'} {act.text}</span>}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

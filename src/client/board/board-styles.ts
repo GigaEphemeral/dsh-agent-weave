@@ -544,4 +544,37 @@ export const BOARD_CSS = `
 /* 节点输出端口（P2：悬停出现） */
 .node-port { transition: opacity .15s var(--w-ease); }
 .weave-board .node:hover .node-port { opacity: 1 !important; }
+
+/* ══════════════════════════════════════════════════════════
+   ui修复2 §P4：节点实时活动卡片
+   ══════════════════════════════════════════════════════════ */
+.node-activity-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 0; border-bottom: 1px solid var(--w-bg-mute);
+  font-size: 12px;
+}
+.node-activity-row:last-child { border-bottom: none; }
+.node-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px;
+  background: #cbd5e1;
+}
+.node-dot.running { background: var(--w-brand); animation: w-pulsering 1.6s var(--w-ease) infinite; }
+.node-dot.completed { background: var(--w-success); }
+.node-dot.failed { background: var(--w-danger); }
+.node-dot.waiting { background: var(--w-warn); }
+.node-id {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: var(--w-text-2); min-width: 90px;
+}
+.node-status {
+  font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 5px;
+}
+.node-status.running { background: var(--w-brand-soft); color: var(--w-brand); }
+.node-status.completed { background: var(--w-success-soft); color: #047857; }
+.node-status.failed { background: var(--w-danger-soft); color: #b91c1c; }
+.node-status.waiting { background: var(--w-warn-soft); color: #b45309; }
+.node-act-text {
+  flex: 1; color: var(--w-text-3); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
 `

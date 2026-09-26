@@ -6,10 +6,22 @@
  * - layoutNodes：cond/loop 边不参与分层（seq 才分层）
  * - buildGraphSpec：边带 when/maxIter；节点带 override
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach } from 'vitest'
 import { effectiveRole, type NodeOverrideInput } from '../../src/l4-visual/host/effective-role'
 import { buildGraphSpec, layoutNodes, resolveLinkTarget, snapToGrid, type EditorEdge, type EditorNode } from '../../src/client/dashboard/canvas-model'
+import { saveGraphDraft, listGraphDrafts, getGraphDraft, removeGraphDraft, saveRolesCache, loadRolesCache } from '../../src/client/dashboard/Persistence'
 import type { RoleDefinition } from '../../src/shared/types'
+
+// P5：mock localStorage（node 环境无浏览器全局）
+const store = new Map<string, string>()
+beforeEach(() => {
+  store.clear()
+  ;(globalThis as { localStorage?: unknown }).localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => { store.set(k, v) },
+    removeItem: (k: string) => { store.delete(k) },
+  }
+})
 
 const baseRole: RoleDefinition = {
   schema_version: '1.0',
@@ -109,6 +121,29 @@ describe('P2/P3 纯逻辑（端口连边落点 + 网格吸附）', () => {
     expect(snapToGrid(29)).toBe(20)
     expect(snapToGrid(24)).toBe(20)
     expect(snapToGrid(10)).toBe(20)
+  })
+})
+
+describe('P5 持久化（localStorage）', () => {
+  it('save/list/get/remove 图草稿；同 id 覆盖保留最新', () => {
+    saveGraphDraft('g1', { a: 1 }, '任务一')
+    saveGraphDraft('g2', { b: 2 })
+    const drafts = listGraphDrafts()
+    expect(drafts).toHaveLength(2)
+    expect(drafts[0]?.id).toBe('g2') // 最新在前
+    expect(getGraphDraft('g1')?.name).toBe('任务一')
+
+    saveGraphDraft('g1', { a: 2 }) // 覆盖
+    expect(listGraphDrafts()).toHaveLength(2)
+    expect(getGraphDraft('g1')?.spec).toEqual({ a: 2 })
+
+    removeGraphDraft('g1')
+    expect(getGraphDraft('g1')).toBeUndefined()
+  })
+
+  it('角色缓存 round-trip', () => {
+    saveRolesCache([{ id: 'R1', name: '需求' }])
+    expect(loadRolesCache()?.roles).toEqual([{ id: 'R1', name: '需求' }])
   })
 })
 
