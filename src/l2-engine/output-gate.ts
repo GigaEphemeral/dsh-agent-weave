@@ -20,7 +20,7 @@ export interface OutputGateOptions {
   only_markdown?: boolean | undefined
   /** 禁止出现的文件扩展名（如 .py / .ts / .bat）。 */
   forbidden_extensions?: string[] | undefined
-  /** 禁止出现在产物正文中的正则特征（如 "pip install"、"import fastapi"）。 */
+  /** 禁止出现在产物正文中的正则特征（如 "pip install"、"import <某框架>"）。 */
   forbidden_content_patterns?: string[] | undefined
 }
 
