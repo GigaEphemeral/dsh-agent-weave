@@ -2,6 +2,15 @@
 schema_version: '1.0'
 id: R1-requirement
 name: 需求分析师
+description: "分析用户需求，产出需求文档，明确 In/Out、验收标准与风险。"
+order: 10
+tags:
+  - 需求
+  - 文档
+suggests_next:
+  - roleRef: R2-architect
+    label: 架构设计
+    reason: 需求确认后进入架构设计
 system_prompt_ref: R1-requirement/SKILL.md
 traits:
   - 发散
@@ -12,8 +21,8 @@ capabilities:
   - 验收基线定义
 tools: []
 model:
-  provider: vol186coding
-  model: deepseek-v4-flash
+  provider: ollama
+  model: qwen3.5:9B
 memory_scope: private
 lifecycle: on-demand
 max_concurrent_children: 1
@@ -27,6 +36,16 @@ quality_gate:
   - 产出含验收基线
   - 产出含 In/Out
 token_budget: 2000
+output:
+  only_markdown: true
+  forbidden_extensions:
+    - .py
+    - .js
+    - .ts
+    - .html
+    - .css
+    - .bat
+    - .sh
 handoff:
   upstream: []
   downstream:

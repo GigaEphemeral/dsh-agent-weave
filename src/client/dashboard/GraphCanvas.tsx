@@ -14,6 +14,8 @@ interface Props {
   snap: GraphSnapshot | null
   roleMap: Record<string, string>
   onSelectNode: (nodeId: string) => void
+  /** MVP-5 Phase D #20：节点活动气泡（nodeId → 最近活动文本）。 */
+  activity?: ReadonlyMap<string, { text: string; icon?: string | undefined }> | null
 }
 
 const NODE_W = 130
@@ -77,7 +79,7 @@ function layout(spec: ClientGraphSpec): Map<string, { x: number; y: number }> {
 }
 
 /** 渲染 SVG 图。 */
-export function GraphCanvas({ spec, snap, roleMap, onSelectNode }: Props) {
+export function GraphCanvas({ spec, snap, roleMap, onSelectNode, activity }: Props) {
   const { nodes, edges, width, height } = useMemo(() => {
     if (!spec) return { nodes: [], edges: [], width: 600, height: 400 }
     const pos = layout(spec)
@@ -108,7 +110,7 @@ export function GraphCanvas({ spec, snap, roleMap, onSelectNode }: Props) {
   }
 
   return (
-    <div className="weave-canvas" style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'auto' }}>
+    <div className="weave-canvas" style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'auto', position: 'relative' }}>
       <svg width={width} height={height} style={{ display: 'block', background: '#fafafa' }}>
         {edges.map((e) =>
           e.from && e.to ? (
@@ -154,6 +156,36 @@ export function GraphCanvas({ spec, snap, roleMap, onSelectNode }: Props) {
           </g>
         ))}
       </svg>
+      {/* MVP-5 Phase D #20：头顶气泡（仅运行中/当前节点且最近有活动时显示） */}
+      {activity && nodes.map((n) => {
+        const a = activity.get(n.id)
+        if (!a) return null
+        const active = n.state === 'running' || snap?.current === n.id
+        if (!active) return null
+        return (
+          <div
+            key={'bubble-' + n.id}
+            style={{
+              position: 'absolute',
+              left: n.x + 4,
+              top: n.y - 24,
+              maxWidth: NODE_W - 8,
+              background: '#1e293b',
+              color: '#f1f5f9',
+              borderRadius: 6,
+              padding: '2px 6px',
+              fontSize: 11,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              boxShadow: '0 2px 6px rgba(0,0,0,.2)',
+            }}
+          >
+            {a.icon ? <span>{a.icon} </span> : null}
+            {a.text}
+          </div>
+        )
+      })}
     </div>
   )
 }

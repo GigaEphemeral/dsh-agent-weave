@@ -2,6 +2,15 @@
 schema_version: '1.0'
 id: R4-designer
 name: 详细设计师
+description: "细化接口、测试分层与边界输入，产出可测试设计。"
+order: 30
+tags:
+  - 设计
+  - 测试方案
+suggests_next:
+  - roleRef: R6-developer
+    label: 开发
+    reason: 设计完成后进入开发
 system_prompt_ref: R4-designer/SKILL.md
 traits:
   - 可测试性
@@ -12,8 +21,8 @@ capabilities:
 tools:
   - read
 model:
-  provider: vol186coding
-  model: deepseek-v4-flash
+  provider: ollama
+  model: qwen3.5:9B
 memory_scope: private
 lifecycle: on-demand
 max_concurrent_children: 1
@@ -27,6 +36,16 @@ quality_gate:
   - 测试分层完整
   - 边界输入覆盖
 token_budget: 2000
+output:
+  only_markdown: true
+  forbidden_extensions:
+    - .py
+    - .js
+    - .ts
+    - .html
+    - .css
+    - .bat
+    - .sh
 handoff:
   upstream:
     - R2-architect

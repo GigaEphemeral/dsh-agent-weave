@@ -94,3 +94,28 @@ metadata:
 - 如果你调用 `subagent`，会被记录为违规，任务视为失败。
 
 **为什么**：本角色定位是"单点执行"，委派会破坏 token 预算、丢失上下文、违反工作流设计。
+## 输出规范（MVP-5 Facts 契约）
+
+你的产出物（唯一文件）最顶部必须包含以下 YAML front-matter，声明你探测/确认过的项目事实：
+
+```yaml
+---
+facts:
+  - key: env.python.version
+    category: environment
+    value: "3.14.6"
+    confidence: confirmed
+    summary: "Python 3.14.6 已安装"
+  - key: api.tencent.qt.status
+    category: api
+    value: available
+    confidence: confirmed
+    summary: "腾讯行情 API 可达"
+---
+```
+
+- key 点分命名：env.* / api.* / constraint.* / file-system.* / reference.*
+- category 取值：environment | api | constraint | file-system | reference | other
+- confidence：confirmed（已实测）/ assumed（推断）
+- 只记录你实际探测/确认过的事实；未探测的不要写
+- 下游会收到“项目事实（上游已确认，请不要重复探测）”注入，禁止重复探测同 key 事实

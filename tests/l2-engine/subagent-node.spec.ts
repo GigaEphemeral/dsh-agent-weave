@@ -32,9 +32,10 @@ function mockCtx() {
       if (i >= 0) endListeners.splice(i, 1)
     }
   })
+  const emits: Array<{ type: string; data?: Record<string, unknown> }> = []
   const ctx = {
     get: () => undefined,
-    emit: () => {},
+    emit: (name: string, evt: unknown) => { emits.push(evt as { type: string; data?: Record<string, unknown> }) },
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
     subagents: {
       list: () => [],
@@ -65,7 +66,7 @@ function mockCtx() {
     on,
     off,
   }
-  return { ctx: ctx as never, calls, started }
+  return { ctx: ctx as never, calls, started, emits }
 }
 
 describe('P3.A.1 + 问题三 addSubagent（continuable）', () => {
@@ -124,6 +125,21 @@ describe('P3.A.1 + 问题三 addSubagent（continuable）', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  it('MVP-5 Phase F：childId 经 node-activity(child-ready) 暴露', async () => {
+    const { ctx, emits } = mockCtx()
+    const g = createStateGraph<Record<string, unknown>>(ctx)
+    g.addSubagent('dev', { provider: 'R6-developer' })
+    const r = await g.run({ messages: [] } as Record<string, unknown>, {
+      checkpoint: async () => {},
+      ...RO,
+      agent: fakeAgent as never,
+    })
+    expect(r.success).toBe(true)
+    const ready = emits.find((e) => e.type === 'graph/node-activity' && e.data?.kind === 'child-ready')
+    expect(ready).toBeDefined()
+    expect(ready?.data?.childId).toBe('child-1')
   })
 
   it('P3.A.3：run 的 signal 贯通到 startContinuable', async () => {

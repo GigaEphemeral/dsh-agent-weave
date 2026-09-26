@@ -6,17 +6,24 @@
 import { useEffect, useState } from 'react'
 import type { TokenRow } from '../types'
 
+interface RoleTokenRow {
+  role: string
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; totalTokens: number }
+}
+
 export function TokenPanel({ graphId }: { graphId: string | null }) {
   const [rows, setRows] = useState<TokenRow[]>([])
+  const [byRole, setByRole] = useState<RoleTokenRow[]>([])
   const [total, setTotal] = useState<{ totalTokens: number }>({ totalTokens: 0 })
 
   useEffect(() => {
     if (!graphId) return
     const fetchData = (): void => {
       fetch(`/api/weave/graph/${graphId}/tokens`)
-        .then((r) => (r.ok ? r.json() : { rows: [], total: { totalTokens: 0 } }))
+        .then((r) => (r.ok ? r.json() : { rows: [], byRole: [], total: { totalTokens: 0 } }))
         .then((d) => {
           setRows(d.rows ?? [])
+          setByRole(d.byRole ?? [])
           setTotal(d.total ?? { totalTokens: 0 })
         })
         .catch(() => {})
@@ -46,6 +53,28 @@ export function TokenPanel({ graphId }: { graphId: string | null }) {
             {rows.map((r) => (
               <tr key={r.node}>
                 <td>{r.node}</td>
+                <td>{r.role}</td>
+                <td style={{ textAlign: 'right' }}>{r.usage.inputTokens.toLocaleString()}</td>
+                <td style={{ textAlign: 'right' }}>{r.usage.outputTokens.toLocaleString()}</td>
+                <td style={{ textAlign: 'right' }}>{r.usage.totalTokens.toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {byRole.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 8 }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: 'left' }}>角色</th>
+              <th style={{ textAlign: 'right' }}>输入</th>
+              <th style={{ textAlign: 'right' }}>输出</th>
+              <th style={{ textAlign: 'right' }}>合计</th>
+            </tr>
+          </thead>
+          <tbody>
+            {byRole.map((r) => (
+              <tr key={r.role}>
                 <td>{r.role}</td>
                 <td style={{ textAlign: 'right' }}>{r.usage.inputTokens.toLocaleString()}</td>
                 <td style={{ textAlign: 'right' }}>{r.usage.outputTokens.toLocaleString()}</td>

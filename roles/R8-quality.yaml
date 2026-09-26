@@ -2,6 +2,13 @@
 schema_version: '1.0'
 id: R8-quality
 name: 质量审核员
+description: "双轴审查代码与规格，分级 P0/P1/P2，判定门禁放行。"
+order: 60
+tags:
+  - 评审
+  - 质量
+suggests_next:
+  []
 system_prompt_ref: R8-quality/SKILL.md
 traits:
   - 双轴审查
@@ -12,8 +19,8 @@ capabilities:
 tools:
   - read
 model:
-  provider: vol186coding
-  model: deepseek-v4-flash
+  provider: ollama
+  model: qwen3.5:9B
 memory_scope: private
 lifecycle: on-demand
 max_concurrent_children: 1
@@ -27,6 +34,16 @@ quality_gate:
   - P0/P1/P2 分级
   - 结论可复核
 token_budget: 2000
+output:
+  only_markdown: true
+  forbidden_extensions:
+    - .py
+    - .js
+    - .ts
+    - .html
+    - .css
+    - .bat
+    - .sh
 handoff:
   upstream:
     - R7-tester

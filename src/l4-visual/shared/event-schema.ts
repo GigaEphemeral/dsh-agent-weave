@@ -32,6 +32,8 @@ export const WsEventSchema = z.object({
     'node-idle-warning',
     'node-loop-detected',
     'graph-paused',
+    'task-proposed',
+    'task-status',
   ]),  node: z.string().optional(),
   timestamp: z.number(),
   data: z.record(z.string(), z.unknown()).default({}),

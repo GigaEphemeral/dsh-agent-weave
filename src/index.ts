@@ -9,6 +9,8 @@ import { registerGraphCommands } from './cli/graph-commands.js'
 import { registerVisualCommands } from './cli/graph-visual-commands.js'
 import { registerGraphRunCommand } from './cli/graph-run-commands.js'
 import { registerGraphResumeCommand } from './cli/graph-resume-commands.js'
+import { registerProposeCommand } from './cli/propose-commands.js'
+import { setRolesDir } from './l4-visual/host/role-library.js'
 import { GraphEngineService } from './l2-engine/graph-service.js'
 import { registerVisualRuntime } from './l4-visual/host/visual-runtime.js'
 import { logger } from './shared/logger.js'
@@ -68,6 +70,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   const rolesDir = resolveDir(config.rolesDir, 'roles')
   const skillsDir = resolveDir(config.skillsDir, 'skills')
   const baseProviderName = config.baseProvider ?? 'spawn'
+
+  // MVP-5 Phase A：角色库服务共享角色目录（单一真相源）
+  setRolesDir(rolesDir)
 
   // ★ 单一真相源：打印一次，便于诊断
   console.log(
@@ -130,6 +135,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   // ★ 关键：把已解析的 rolesDir 传给图执行命令（单一真相源）
   registerGraphRunCommand(ctx, { rolesDir })
   registerGraphResumeCommand(ctx)
+  // MVP-5 Phase I：结构化任务入口（weave_propose_task）
+  registerProposeCommand(ctx)
 
   ctx.plugin(GraphEngineService, {
     defaultMaxIterations: 25,
@@ -153,6 +160,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       'weave_graph_status',
       'weave_graph_tail',
       'weave_run_graph',
+      'weave_propose_task',
     ],
   })
 }

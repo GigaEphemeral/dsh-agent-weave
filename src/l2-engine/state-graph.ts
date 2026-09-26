@@ -38,6 +38,9 @@ import { validateNodeOutput } from './node-validator.js'
 import { getGraphControl, clearGraphControl } from './graph-control.js'
 import { classifyError } from './error-classifier.js'
 import { writePauseSnapshot } from './pause-snapshot.js'
+import { ProjectMemory, extractFactsFromMarkdown } from './project-memory.js'
+import { runPreflightChecks, type PreflightCheck } from './environment-gate.js'
+import { checkOutputGate, type OutputGateOptions } from './output-gate.js'
 import { waitForSubagentEnd, PauseError } from './subagent-waiter.js'
 import type { PauseSnapshot } from './types.js'
 import type { RunLedger, LedgerEventType } from '../l5-observability/run-ledger.js'
@@ -182,6 +185,10 @@ export interface SubagentNodeOptions {
     requires: string[]
     requiresAny?: string[]
   }
+  /** MVP-5 问题 2：Environment Gate 前置检查（不满足 → 图暂停，不静默降级）。 */
+  environmentPreflight?: readonly PreflightCheck[]
+  /** MVP-5 问题 1/3：Output Gate（角色职责越界扫描）。 */
+  outputGate?: OutputGateOptions
 }
 
 /** 引擎实例选项。 */
@@ -215,6 +222,7 @@ export function createStateGraph<T extends Record<string, unknown>>(
   ledger?: RunLedger,
   tokenCollector?: TokenCollector,
   observer?: EngineObservability['observer'],
+  projectMemory?: ProjectMemory,
 ): StateGraph<T> {
   const nodes = new Map<string, NodeHandler<T>>()
   const nodeMetas = new Map<string, NodeMeta>() // NEW-10
@@ -282,17 +290,29 @@ export function createStateGraph<T extends Record<string, unknown>>(
         if (!agent) throw new Error(`子代理节点 "${name}" 需要 RunOptions.agent（真实 Agent 作 parent）`)
         // 问题三 D1：输入门禁（上游产物存在且非空；缺失 → 抛错 → 图停）
         checkInputGate(options.inputGate, state, name)
+        // MVP-5 问题 2：Environment Gate 前置检查（环境不满足 → 暂停，不静默降级）
+        await runPreflightChecks(options.environmentPreflight, { nodeName: name })
         const upstreamArtifacts = state.artifacts as Record<string, string> | undefined
         const upstreamSummary = upstreamArtifacts
           ? Object.entries(upstreamArtifacts).map(([n, p]) => `[${n}] ${p}`).join('\n')
           : '（无上游产物）'
+        // MVP-5 问题 4：上游已确认事实注入（下游不再重复探测）
+        const factsSection = projectMemory ? projectMemory.toPromptSection() : ''
         // 通道 C（问题 5）：行为约束——子代理每步输出 [动作]，供观测"在干什么"
-        const prompt = (options.promptTemplate ??
+        let prompt = (options.promptTemplate ??
           '以 {{provider}} 角色完成任务：\n{{user_input}}\n\n上游产物：\n{{upstream}}\n\n' +
           '【行为约束】每次调用工具前，先输出一行 "[动作] 正在 <做什么>（工具: <toolName>）"，例如 "[动作] 正在搜索相关文件（工具: glob）"。')
           .replaceAll('{{provider}}', options.provider)
           .replaceAll('{{user_input}}', String((state.user_input as string | undefined) ?? ''))
           .replaceAll('{{upstream}}', upstreamSummary)
+        // facts 有占位则填充；无占位则在末尾追加（保证下游总能看到上游事实）
+        if (factsSection) {
+          prompt = prompt.includes('{{facts}}')
+            ? prompt.replaceAll('{{facts}}', factsSection)
+            : prompt + '\n\n' + factsSection
+        } else {
+          prompt = prompt.replaceAll('{{facts}}', '')
+        }
         const startAt = Date.now()
         // 问题 2 定位日志①：start 调用前（确认参数与 provider 解析路径）
         logger.info('weave-addsubagent', 'start 调用前', {
@@ -326,6 +346,14 @@ export function createStateGraph<T extends Record<string, unknown>>(
             })
             childIdByNode.set(name, started.childId)
             activeChildId = started.childId
+            // MVP-5 Phase F：引擎侧暴露 childId（前端双击节点跳转 subagent 视图）
+            nodeCtx.emit({
+              type: 'graph/node-activity',
+              graphId: nodeCtx.graphId,
+              node: name,
+              timestamp: Date.now(),
+              data: { childId: activeChildId, kind: 'child-ready', text: '子代理已就绪（可双击跳转）' },
+            })
             // 问题 2 定位日志③：continuable 创建成功（childId 持久化）
             logger.info('weave-addsubagent', 'startContinuable 返回', {
               node: name,
@@ -416,6 +444,18 @@ export function createStateGraph<T extends Record<string, unknown>>(
           const file = join(nodeDir, options.artifactName)
           writeFileSync(file, text, 'utf8')
           patch.artifacts = { [name]: file }
+          // MVP-5 问题 4：解析产物 YAML front-matter facts → 共享到下游 prompt
+          if (projectMemory) {
+            const facts = extractFactsFromMarkdown(text, options.provider)
+            if (facts.length > 0) projectMemory.setFacts(facts)
+          }
+          // MVP-5 问题 1/3：Output Gate（角色职责越界扫描，只校验节点自身产物）
+          const outputResult = checkOutputGate(options.outputGate, file, text)
+          if (!outputResult.passed) {
+            const err = new Error('输出门禁未过（节点 ' + name + '）: ' + outputResult.failures.join('; '))
+            logger.warn('weave-addsubagent', '输出门禁未过，节点失败（整图终止）', { node: name, failures: outputResult.failures })
+            throw err
+          }
         }
         // 问题四修复1+2：质量门验证（产物空/数量不足 → 抛错 → 节点失败 → 整图停，不再继续空跑）
         if (options.qualityGate && options.qualityGate.length > 0) {

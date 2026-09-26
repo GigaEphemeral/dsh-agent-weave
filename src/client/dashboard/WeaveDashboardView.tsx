@@ -15,8 +15,11 @@ import { MessageFlowPanel } from './MessageFlowPanel'
 import { NodeActivityPanel } from './NodeActivityPanel'
 import { RunHistoryPanel } from './RunHistoryPanel'
 import { RestorePanel } from './RestorePanel'
+import { RoleLibraryPanel } from './RoleLibraryPanel'
+import { WeaveTaskPanel } from './WeaveTaskPanel'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { useGraphStream } from '../hooks/useGraphStream'
+import { useActivityFeed } from '../hooks/useActivityFeed'
 
 /** conversation.view 的 owner props（viewRequest 等；MVP-4 不依赖 focus 机制）。 */
 export interface ConvViewOwnerProps {
@@ -30,6 +33,7 @@ export function WeaveDashboardView(_owner: ConvViewOwnerProps = {}) {
   const [graphId, setGraphId] = useState<string | null>(null)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const { snap, spec, roleMap } = useGraphStream(graphId)
+  const activity = useActivityFeed(graphId)
 
   // ★ 问题一步骤4：监听全局图启动事件，自动绑定 graphId（用户零操作）
   useEffect(() => {
@@ -58,7 +62,7 @@ export function WeaveDashboardView(_owner: ConvViewOwnerProps = {}) {
     <ErrorBoundary>
       <div className="weave-dashboard" data-weave-dashboard style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <ControlBar graphId={graphId} onGraphChange={setGraphId} />
-        <GraphCanvas spec={spec} snap={snap} roleMap={roleMap} onSelectNode={setSelectedNode} />
+        <GraphCanvas spec={spec} snap={snap} roleMap={roleMap} onSelectNode={setSelectedNode} activity={activity} />
         <div className="weave-panels" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
           <ErrorBoundary><TokenPanel graphId={graphId} /></ErrorBoundary>
           <ErrorBoundary><ApprovalPanel graphId={graphId} /></ErrorBoundary>
@@ -69,6 +73,8 @@ export function WeaveDashboardView(_owner: ConvViewOwnerProps = {}) {
           )}
           <ErrorBoundary><RunHistoryPanel onSelect={setGraphId} /></ErrorBoundary>
           <ErrorBoundary><RestorePanel graphId={graphId} /></ErrorBoundary>
+          <ErrorBoundary><RoleLibraryPanel /></ErrorBoundary>
+          <ErrorBoundary><WeaveTaskPanel /></ErrorBoundary>
         </div>
       </div>
     </ErrorBoundary>

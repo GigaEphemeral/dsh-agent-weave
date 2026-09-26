@@ -30,6 +30,14 @@ export interface WebServerLike {
 /** 全局 Token 分账收集器（引擎 node-end 写入；REST /tokens 读取）。 */
 let globalTokens: TokenCollector | null = null
 
+/** 全局 SSE broker（任务事件 / 面板推送用）。 */
+let globalBroker: SseBroker | null = null
+
+/** 获取全局 SSE broker（headless 未初始化时为 null）。 */
+export function getGlobalBroker(): SseBroker | null {
+  return globalBroker
+}
+
 /** 获取全局 TokenCollector（惰性创建，幂等）。 */
 export function getGlobalTokens(): TokenCollector {
   if (!globalTokens) globalTokens = createTokenCollector()
@@ -39,6 +47,7 @@ export function getGlobalTokens(): TokenCollector {
 /** 在 webServer 可用时挂载可视化路由。 */
 export function registerVisualRuntime(ctx: Context): () => void {
   const broker = createSseBroker()
+  globalBroker = broker
   const approvals = createApprovalService(broker)
   const tokens = getGlobalTokens()
 

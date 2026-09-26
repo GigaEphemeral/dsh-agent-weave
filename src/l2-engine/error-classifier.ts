@@ -74,6 +74,30 @@ export function classifyError(error: Error): ErrorClassification {
     }
   }
 
+  if (msg.includes('环境门禁未过') || msg.includes('environment gate')) {
+    return {
+      reason: 'environment-gate',
+      needsUserIntervention: true,
+      details: {
+        error: error.message,
+        suggestedAction: '环境不满足：安装缺失依赖或调整图后，用 weave_graph_resume 恢复；禁止静默降级',
+      },
+    }
+  }
+
+  // 输出门禁（角色越界）→ 权限/职责问题，需人工介入
+  if (msg.includes('输出门禁未过')) {
+    return {
+      reason: 'permission-denied',
+      needsUserIntervention: true,
+      details: {
+        error: error.message,
+        deniedOperation: 'output-gate',
+        suggestedAction: '检查角色职责边界（Output Gate）后恢复',
+      },
+    }
+  }
+
   // 质量门失败 / 子代理产出空：可重试，提示检查后恢复
   if (msg.includes('质量门未过') || msg.includes('产出为空') || msg.includes('子代理')) {
     return {

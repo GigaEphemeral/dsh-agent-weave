@@ -2,6 +2,15 @@
 schema_version: '1.0'
 id: R6-developer
 name: 开发者
+description: "按设计实现代码，自带单测，遵守开发纪律。"
+order: 40
+tags:
+  - 开发
+  - TypeScript
+suggests_next:
+  - roleRef: R7-tester
+    label: 测试
+    reason: 开发完成后进入独立测试
 system_prompt_ref: R6-developer/SKILL.md
 traits:
   - 严谨
@@ -17,8 +26,8 @@ tools:
   - edit
   - pwsh
 model:
-  provider: vol186coding
-  model: deepseek-v4-flash
+  provider: ollama
+  model: qwen3.5:9B
 memory_scope: private
 lifecycle: on-demand
 max_concurrent_children: 1

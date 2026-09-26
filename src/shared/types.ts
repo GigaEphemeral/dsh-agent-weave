@@ -52,11 +52,53 @@ export const RoleCapabilitySchema = z.object({
   allow_write: z.boolean().default(true),
 })
 
+/** 环境前提检查（MVP-5 问题 2：Environment Gate）。 */
+export interface RoleEnvironment {
+  preflight: Array<{
+    cmd: string
+    expect_contains?: string | undefined
+    expect_exit_zero?: boolean | undefined
+  }>
+}
+
+export const RoleEnvironmentSchema = z.object({
+  preflight: z.array(z.object({
+    cmd: z.string().min(1),
+    expect_contains: z.string().optional(),
+    expect_exit_zero: z.boolean().optional(),
+  })).default([]),
+})
+
+/** 角色输出约束（MVP-5 问题 1/3：Output Gate，只校验节点自身产物）。 */
+export interface RoleOutputGate {
+  only_markdown?: boolean | undefined
+  forbidden_extensions?: string[] | undefined
+  forbidden_content_patterns?: string[] | undefined
+}
+
+export const RoleOutputGateSchema = z.object({
+  only_markdown: z.boolean().optional(),
+  forbidden_extensions: z.array(z.string()).optional(),
+  forbidden_content_patterns: z.array(z.string()).optional(),
+})
+
 /** 角色定义（从 YAML 加载后经 Zod 校验）。 */
 export interface RoleDefinition {
   schema_version: string
   id: string
   name: string
+  /** MVP-5 Phase A：角色库展示描述（hover 提示）。 */
+  description?: string | undefined
+  /** MVP-5 Phase A：角色库排序权重（小在前）。 */
+  order?: number | undefined
+  /** MVP-5 Phase A：角色标签（搜索/分组）。 */
+  tags?: string[] | undefined
+  /** MVP-5 Phase A：引导式画布推荐下一步。 */
+  suggests_next?: Array<{
+    roleRef: string
+    label?: string | undefined
+    reason?: string | undefined
+  }> | undefined
   /** 指向 skills 目录下 Markdown 文件的路径（相对 skillsDir 或绝对路径）。 */
   system_prompt_ref: string
   traits: string[]
@@ -81,12 +123,24 @@ export interface RoleDefinition {
   }
   /** 可选观察者配置；zod 推断为 `ObserverConfig[] | undefined`（兼容 exactOptionalPropertyTypes）。 */
   observers?: ObserverConfig[] | undefined
+  /** MVP-5 问题 2：环境前提检查（可选）。 */
+  environment?: RoleEnvironment | undefined
+  /** MVP-5 问题 1/3：输出约束（可选）。 */
+  output?: RoleOutputGate | undefined
 }
 
 export const RoleDefinitionSchema = z.object({
   schema_version: z.literal('1.0'),
   id: z.string().min(1),
   name: z.string().min(1),
+  description: z.string().optional(),
+  order: z.number().optional(),
+  tags: z.array(z.string()).optional(),
+  suggests_next: z.array(z.object({
+    roleRef: z.string().min(1),
+    label: z.string().optional(),
+    reason: z.string().optional(),
+  })).optional(),
   system_prompt_ref: z.string().min(1),
   traits: z.array(z.string()),
   capabilities: z.array(z.string()),
@@ -113,6 +167,8 @@ export const RoleDefinitionSchema = z.object({
     edge_type: z.enum(['seq', 'cond']),
   }),
   observers: z.array(ObserverConfigSchema).optional(),
+  environment: RoleEnvironmentSchema.optional(),
+  output: RoleOutputGateSchema.optional(),
 })
 
 /** RoleDefinition 的 Zod 推断类型（与 interface 保持一致的双重校验出口）。 */
@@ -159,6 +215,15 @@ export interface RoleProfile {
     token_budget: number
     lifecycle: 'resident' | 'on-demand' | 'hybrid'
     handoff: RoleDefinition['handoff']
+    /** MVP-5 问题 2：环境前提检查。 */
+    environment?: RoleDefinition['environment']
+    /** MVP-5 问题 1/3：输出约束。 */
+    output?: RoleDefinition['output']
+    /** MVP-5 Phase A：角色库元数据。 */
+    description?: string | undefined
+    order?: number | undefined
+    tags?: string[] | undefined
+    suggests_next?: RoleDefinition['suggests_next']
   }
 }
 

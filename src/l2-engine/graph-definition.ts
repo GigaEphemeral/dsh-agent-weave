@@ -74,6 +74,17 @@ export const ObserverConfigSchema = z.object({
   tokenBudget: z.number().int().positive(),
 })
 
+/** 图级约束 Schema（MVP-5 问题 3）。 */
+export const GraphConstraintsSchema = z.object({
+  required_phases: z.array(z.string().min(1)).optional(),
+  allow_silent_degrade: z.boolean().optional(),
+  independent_verification: z.object({
+    test_node: z.string().min(1).optional(),
+    quality_node: z.string().min(1).optional(),
+    must_be_independent_from: z.array(z.string().min(1)).optional(),
+  }).optional(),
+})
+
 export const GraphDefinitionSpecSchema = z
   .object({
     version: z.string().min(1),
@@ -87,6 +98,7 @@ export const GraphDefinitionSpecSchema = z
     checkpoint: CheckpointSpecSchema,
     metadata: GraphMetadataSchema,
     observers: z.array(ObserverConfigSchema).optional(),
+    constraints: GraphConstraintsSchema.optional(),
   })
   .refine((spec) => spec.nodes.some((n) => n.id === spec.entryPoint), {
     message: 'entryPoint 必须指向已定义的节点',
@@ -162,6 +174,7 @@ export function computeGraphSchemaHash(spec: Omit<GraphDefinitionSpec, 'graphSch
     nodes: spec.nodes,
     edges: spec.edges,
     checkpoint: spec.checkpoint,
+    constraints: spec.constraints,
   })
   return createHash('sha256').update(canonical).digest('hex').slice(0, 12)
 }

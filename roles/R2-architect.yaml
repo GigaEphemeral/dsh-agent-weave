@@ -2,6 +2,15 @@
 schema_version: '1.0'
 id: R2-architect
 name: 架构师
+description: "负责技术选型、模块划分、关键接口设计与契约核查。"
+order: 20
+tags:
+  - 设计
+  - 架构
+suggests_next:
+  - roleRef: R4-designer
+    label: 详细设计
+    reason: 架构确定后进入详细设计
 system_prompt_ref: R2-architect/SKILL.md
 traits:
   - 模块化
@@ -12,8 +21,8 @@ capabilities:
 tools:
   - read
 model:
-  provider: vol186coding
-  model: deepseek-v4-flash
+  provider: ollama
+  model: qwen3.5:9B
 memory_scope: private
 lifecycle: on-demand
 max_concurrent_children: 1
@@ -27,6 +36,16 @@ quality_gate:
   - 契约与限制已核查
   - 模块职责表完整
 token_budget: 2000
+output:
+  only_markdown: true
+  forbidden_extensions:
+    - .py
+    - .js
+    - .ts
+    - .html
+    - .css
+    - .bat
+    - .sh
 handoff:
   upstream:
     - R1-requirement

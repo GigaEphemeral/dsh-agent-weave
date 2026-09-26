@@ -20,6 +20,7 @@ import { loadGraphSpec, resolveExecWorkspace } from './graph-commands.js'
 import { computeGraphSchemaHash } from '../l2-engine/graph-definition.js'
 import { validateGraph } from '../l2-engine/static-validator.js'
 import { createStateGraph, SKIP } from '../l2-engine/state-graph.js'
+import { ProjectMemory } from '../l2-engine/project-memory.js'
 import { evaluateCondition } from '../l2-engine/condition-edge.js'
 import { setGlobalBus } from '../l4-visual/host/shared-bus.js'
 import { resolveArtifactsRoot } from '../l4-visual/host/artifacts-root.js'
@@ -76,6 +77,8 @@ export async function runGraphRealTool(
       (evt) => bus.handle(evt), // P4.0.1：引擎事件 → 全局 bus
       getGlobalLedger(),        // P1-1：RunLedger
       getGlobalTokens(),        // P1-2：Token 分账（真实数值）
+      undefined,                // observer（MVP-4 P4.B.7 预留位）
+      new ProjectMemory(),      // MVP-5 问题 4：项目事实共享（跨节点注入/收集）
   )
 
   // P4.A.4：注册 spec/roleMap 供 REST 读取
@@ -100,6 +103,12 @@ export async function runGraphRealTool(
         ...(role && role.quality_gate.length > 0 ? { qualityGate: role.quality_gate } : {}),
         // 问题三 D1：透传 inputGate（图 DSL 节点可配置）
         ...(node.inputGate !== undefined ? { inputGate: node.inputGate } : {}),
+        // MVP-5 问题 2：Environment Gate（角色 YAML environment.preflight）
+        ...(role && role.environment && role.environment.preflight.length > 0
+          ? { environmentPreflight: role.environment.preflight }
+          : {}),
+        // MVP-5 问题 1/3：Output Gate（角色 YAML output 约束）
+        ...(role && role.output ? { outputGate: role.output } : {}),
       })
     } else if (node.nodeType === 'approval') {
       graph.addApprovalGate(node.id, {

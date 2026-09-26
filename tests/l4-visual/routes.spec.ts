@@ -1,0 +1,178 @@
+/**
+ * MVP-5 REST 路由单测（Phase I/A/B）。
+ *
+ * 通过 registerVisualRoutes 暴露的 getWeaveHandler() 直接调用内部 handler，
+ * 覆盖：任务 CRUD/取消/启动守卫、角色库、图保存/列表。
+ */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { registerVisualRoutes, getWeaveHandler } from '../../src/l4-visual/host/routes'
+import { createSseBroker } from '../../src/l4-visual/host/sse-broker'
+import { createApprovalService } from '../../src/l4-visual/host/approval-service'
+import { createTokenCollector } from '../../src/l5-observability/token-collector'
+import { createTask, deleteTask } from '../../src/l4-visual/host/task-store'
+import { setRolesDir } from '../../src/l4-visual/host/role-library'
+import { setGraphsDir } from '../../src/l4-visual/host/graph-store'
+import { buildGraphFromTemplate } from '../../src/l4-visual/host/task-store'
+
+interface ResState { status: number; body: unknown }
+
+function makeRes(): { res: unknown; state: ResState } {
+  const state: ResState = { status: 0, body: null }
+  const res = {
+    writeHead(code: number): Record<string, unknown> { state.status = code; return {} },
+    end(body?: string): unknown { state.body = body ? JSON.parse(body) as unknown : null; return {} },
+    write(): boolean { return true },
+  }
+  return { res, state }
+}
+
+interface ReqMock {
+  method?: string
+  url?: string
+  headers: Record<string, string>
+  on(ev: string, cb: (...args: unknown[]) => void): unknown
+  off(ev: string, cb: (...args: unknown[]) => void): unknown
+  _emit(ev: string, ...args: unknown[]): void
+}
+
+function makeReq(method: string, url: string, body?: unknown): ReqMock {
+  const listeners: Record<string, Array<(...args: unknown[]) => void>> = {}
+  return {
+    method,
+    url,
+    headers: {},
+    on(ev, cb) { (listeners[ev] ??= []).push(cb); return {} },
+    off(ev, cb) {
+      const arr = listeners[ev] ?? []
+      const i = arr.indexOf(cb)
+      if (i >= 0) arr.splice(i, 1)
+      return {}
+    },
+    _emit(ev, ...args) {
+      for (const cb of listeners[ev] ?? []) cb(...args)
+    },
+  }
+}
+
+function setupHandler(): (rest: string, req: unknown, res: unknown) => Promise<void> {
+  delete process.env.WEAVE_API_TOKEN
+  const broker = createSseBroker()
+  const approvals = createApprovalService(broker)
+  const tokens = createTokenCollector()
+  const ctx = {
+    get: () => undefined,
+    on: () => {},
+    emit: () => {},
+    logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    subagents: { list: () => [], sendMessage: async () => 'x' },
+    effect: (fn: () => unknown) => { const d = fn(); return () => { if (typeof d === 'function') d() } },
+  }
+  const webServer = { register: () => () => {} }
+  registerVisualRoutes(ctx as never, broker, approvals, tokens, webServer)
+  const handle = getWeaveHandler()
+  if (!handle) throw new Error('handler not exposed')
+  return handle as (rest: string, req: unknown, res: unknown) => Promise<void>
+}
+
+const r1Yaml = `schema_version: '1.0'
+id: R1-requirement
+name: 需求分析师
+description: 分析用户需求
+order: 10
+tags: [需求]
+system_prompt_ref: R1/SKILL.md
+traits: []
+capabilities: []
+tools: []
+model: { provider: huoshan-haowen, model: deepseek-v4-flash }
+memory_scope: private
+lifecycle: on-demand
+max_concurrent_children: 1
+capability: { allow_delegation: false, max_depth: 1, allowed_children: [], allow_shell: true, allow_write: true }
+quality_gate: []
+token_budget: 2000
+handoff: { upstream: [], downstream: [R2], edge_type: seq }
+`
+
+let rolesDir = ''
+let graphsDir = ''
+
+beforeEach(() => {
+  rolesDir = mkdtempSync(join(tmpdir(), 'weave-routes-roles-'))
+  graphsDir = mkdtempSync(join(tmpdir(), 'weave-routes-graphs-'))
+  writeFileSync(join(rolesDir, 'R1-requirement.yaml'), r1Yaml, 'utf8')
+  setRolesDir(rolesDir)
+  setGraphsDir(graphsDir)
+})
+
+afterEach(() => {
+  rmSync(rolesDir, { recursive: true, force: true })
+  rmSync(graphsDir, { recursive: true, force: true })
+})
+
+describe('weave REST 路由', () => {
+  it('GET /tasks 返回任务列表', async () => {
+    const handle = setupHandler()
+    const { res, state } = makeRes()
+    createTask({
+      taskId: 'task-r1', sessionId: 's1', userInput: 'x', template: 'full-sdlc',
+      graph: buildGraphFromTemplate('full-sdlc'), status: 'proposing',
+    })
+    await handle('/tasks', makeReq('GET', '/api/weave/tasks'), res)
+    expect(state.status).toBe(200)
+    expect((state.body as Array<{ taskId: string }>).some((t) => t.taskId === 'task-r1')).toBe(true)
+    deleteTask('task-r1')
+  })
+
+  it('POST /tasks/:id/cancel → aborted', async () => {
+    const handle = setupHandler()
+    createTask({
+      taskId: 'task-c1', sessionId: 's2', userInput: 'x', template: 'quick-dev',
+      graph: buildGraphFromTemplate('quick-dev'), status: 'proposing',
+    })
+    const { res, state } = makeRes()
+    await handle('/tasks/task-c1/cancel', makeReq('POST', '/api/weave/tasks/task-c1/cancel'), res)
+    expect(state.status).toBe(200)
+    deleteTask('task-c1')
+  })
+
+  it('POST /tasks/:id/start 缺少 parentAgent → 409', async () => {
+    const handle = setupHandler()
+    createTask({
+      taskId: 'task-s1', sessionId: 's3', userInput: 'x', template: 'custom',
+      graph: buildGraphFromTemplate('custom'), status: 'drafting',
+    })
+    const { res, state } = makeRes()
+    await handle('/tasks/task-s1/start', makeReq('POST', '/api/weave/tasks/task-s1/start'), res)
+    expect(state.status).toBe(409)
+    deleteTask('task-s1')
+  })
+
+  it('GET /roles 返回角色库（搜索/排序参数透传）', async () => {
+    const handle = setupHandler()
+    const { res, state } = makeRes()
+    await handle('/roles', makeReq('GET', '/api/weave/roles?search=需求'), res)
+    expect(state.status).toBe(200)
+    expect((state.body as Array<{ id: string }>)[0]?.id).toBe('R1-requirement')
+  })
+
+  it('POST /graphs 保存 + GET /graphs/saved 列表', async () => {
+    const handle = setupHandler()
+    const spec = buildGraphFromTemplate('quick-dev')
+    const req = makeReq('POST', '/api/weave/graphs', { id: 'g1', spec })
+    const saveRes = makeRes()
+    const pending = handle('/graphs', req, saveRes.res)
+    req._emit('data', Buffer.from(JSON.stringify({ id: 'g1', spec })))
+    req._emit('end')
+    await pending
+    expect(saveRes.state.status).toBe(200)
+
+    const listRes = makeRes()
+    await handle('/graphs/saved', makeReq('GET', '/api/weave/graphs/saved'), listRes.res)
+    expect(listRes.state.status).toBe(200)
+    expect((listRes.state.body as Array<{ id: string }>)[0]?.id).toBe('g1')
+  })
+})

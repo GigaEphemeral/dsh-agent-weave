@@ -145,6 +145,7 @@ export type PauseReason =
   | 'user-pause' | 'approval-pending' | 'permission-denied'
   | 'dependency-missing' | 'budget-exceeded'
   | 'tool-error-retryable' | 'tool-error-fatal' | 'timeout'
+  | 'environment-gate'
 
 /** ★ 问题五：暂停快照（节点失败/需人工介入时落盘，供 weave_graph_resume 恢复）。 */
 export interface PauseSnapshot<T> {
@@ -210,6 +211,8 @@ export interface GraphDefinitionSpec {
   checkpoint: CheckpointSpec
   metadata: GraphMetadata
   observers?: ObserverConfig[]
+  /** MVP-5 问题 3：图级约束（SOP 顺序 / 独立验证 / 禁止静默降级）。 */
+  constraints?: GraphConstraints
 }
 
 /** 图节点规格。 */
@@ -253,6 +256,21 @@ export interface GraphMetadata {
   source: 'canvas' | 'yaml' | 'hybrid'
   createdAt: string
   updatedAt: string
+}
+
+/** 图级约束（MVP-5 问题 3：SOP 顺序 + 独立验证；问题 2：禁止静默降级）。 */
+export interface GraphConstraints {
+  /** 强制 SOP 阶段顺序（节点 id 有序列表；图中必须有对应路径，乱序即校验失败）。 */
+  required_phases?: string[]
+  /** 是否允许节点静默降级（缺省 false = 任何降级必须暂停待用户决策）。 */
+  allow_silent_degrade?: boolean
+  /** 独立验证约束：测试/评审节点必须独立于开发节点。 */
+  independent_verification?: {
+    test_node?: string
+    quality_node?: string
+    /** 测试/评审不得是这些节点的下游直接产物验证者（通常为 develop）。 */
+    must_be_independent_from?: string[]
+  }
 }
 
 /** 观察者配置（MVP-3 全量启用；MVP-2 仅静态校验 + L1）。 */

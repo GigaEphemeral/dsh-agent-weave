@@ -27,9 +27,54 @@ import { listRuns, listCheckpoints } from './run-history.js'
 import { readNodeActivity } from './activity-reader.js'
 import { pauseGraph, resumeGraph, stopGraph } from './graph-control.js'
 import { controlActiveGraph } from '../../l2-engine/graph-control.js'
+import type { GraphDefinitionSpec } from '../../l2-engine/types.js'
+import {
+  getTask,
+  listTasks,
+  updateTask,
+  deleteTask,
+  STARTABLE_STATUSES,
+  type TaskDraft,
+} from './task-store.js'
 
-type Req = { method?: string; url?: string; headers?: Record<string, string | string[] | undefined>; on?: (ev: string, cb: () => void) => unknown }
+type Req = {
+  method?: string
+  url?: string
+  headers?: Record<string, string | string[] | undefined>
+  on?: (ev: string, cb: (...args: unknown[]) => void) => unknown
+  off?: (ev: string, cb: (...args: unknown[]) => void) => unknown
+}
 type Res = { writeHead(code: number, headers?: Record<string, string>): unknown; end(body?: string): unknown; write?(body: string): boolean }
+
+/** 读取 JSON 请求体（空 body 返回 {}）。 */
+function readBody(req: Req): Promise<Record<string, unknown>> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = []
+    const onData = (chunk: unknown): void => {
+      if (Buffer.isBuffer(chunk)) chunks.push(chunk)
+      else if (typeof chunk === 'string') chunks.push(Buffer.from(chunk, 'utf8'))
+    }
+    const onEnd = (): void => {
+      req.off?.('data', onData)
+      req.off?.('end', onEnd)
+      try {
+        const raw = Buffer.concat(chunks).toString('utf8').trim()
+        resolve(raw ? (JSON.parse(raw) as Record<string, unknown>) : {})
+      } catch {
+        resolve({})
+      }
+    }
+    req.on?.('data', onData)
+    req.on?.('end', onEnd)
+  })
+}
+
+/** 对外返回任务（剥离非序列化 parentAgent）。 */
+function publicTask(task: TaskDraft): Omit<TaskDraft, 'parentAgent'> {
+  const { parentAgent: _parentAgent, ...pub } = task
+  void _parentAgent
+  return pub
+}
 
 function json(res: Res, code: number, body: unknown): void {
   res.writeHead(code, { 'Content-Type': 'application/json' })
@@ -59,6 +104,15 @@ function parseApprovalPath(rest: string): { id: string; action: string } | null 
   return { id: parts[0] ?? '', action: parts[1] ?? '' }
 }
 
+type WeaveHandler = (rest: string, req: Req, res: Res) => Promise<void>
+
+/** 最近一次注册的 weave 请求处理器（供单测直接调用；不参与生产路由）。 */
+let weaveHandler: WeaveHandler | null = null
+
+export function getWeaveHandler(): WeaveHandler | null {
+  return weaveHandler
+}
+
 export function registerVisualRoutes(
   ctx: Context,
   broker: SseBroker,
@@ -69,12 +123,13 @@ export function registerVisualRoutes(
   void ctx
   const disposers: Array<() => void> = []
 
-  const handle = (rest: string, req: Req, res: Res): void => {
+  const handle = async (rest: string, req: Req, res: Res): Promise<void> => {
     if (!requireAuth(req)) {
       json(res, 401, { error: 'unauthorized' })
       return
     }
     const method = req.method ?? 'GET'
+    const query = new URLSearchParams((req.url ?? '').split('?')[1] ?? '')
 
     // GET /api/weave/stream —— 全局事件流（★ 问题一步骤2：前端感知新图启动）
     if (rest === '/stream' || rest === '/stream/') {
@@ -95,12 +150,178 @@ export function registerVisualRoutes(
       return
     }
 
+    // GET /api/weave/roles —— 角色库（MVP-5 Phase A：搜索/排序）
+    if (rest === '/roles' || rest === '/roles/') {
+      if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+      const { listRoles } = await import('./role-library.js')
+      json(res, 200, listRoles({
+        search: query.get('search') ?? undefined,
+        sort: query.get('sort') === 'name' ? 'name' : 'order',
+      }))
+      return
+    }
+
+    // 图保存与复用（MVP-5 Phase B）：/api/weave/graphs/saved[...]
+    const gparts = rest.split('/').filter(Boolean)
+    if (gparts[0] === 'graphs' && gparts[1] === 'saved') {
+      const { listSavedGraphs, loadSavedGraph, deleteSavedGraph, cloneSavedGraph } = await import('./graph-store.js')
+      if (gparts.length === 2 && method === 'GET') {
+        json(res, 200, listSavedGraphs())
+        return
+      }
+      if (gparts.length === 3) {
+        const id = gparts[2] ?? ''
+        if (method === 'GET') {
+          const g = loadSavedGraph(id)
+          if (!g) { json(res, 404, { error: 'graph not found' }); return }
+          json(res, 200, g)
+          return
+        }
+        if (method === 'DELETE') {
+          const ok = deleteSavedGraph(id)
+          json(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'graph not found' })
+          return
+        }
+        json(res, 405, { error: 'method not allowed' })
+        return
+      }
+      if (gparts.length === 4 && gparts[3] === 'clone' && method === 'POST') {
+        const r = cloneSavedGraph(gparts[2] ?? '')
+        json(res, r.ok ? 200 : 404, r)
+        return
+      }
+      json(res, 400, { error: 'bad graphs path' })
+      return
+    }
+
+    // POST /api/weave/graphs —— 保存图（Phase B）
+    if (rest === '/graphs' || rest === '/graphs/') {
+      if (method === 'POST') {
+        const body = await readBody(req)
+        const spec = body.spec as GraphDefinitionSpec | undefined
+        const id = typeof body.id === 'string' && body.id ? body.id : 'graph-' + Date.now()
+        const meta = (body.meta ?? {}) as { name?: string; description?: string }
+        if (!spec) { json(res, 400, { error: 'spec required' }); return }
+        const { saveGraph } = await import('./graph-store.js')
+        try {
+          json(res, 200, saveGraph(id, spec, meta))
+        } catch (error) {
+          json(res, 400, { error: 'graph invalid', details: error instanceof Error ? error.message : String(error) })
+        }
+        return
+      }
+    }
+
     // GET /api/weave/graphs（无 graphId）
     if (rest === '/graphs' || rest === '/graphs/') {
       if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
       const entry = getGraph('') // 当前注册图（单图模式取任意）
       const root = entry?.artifactsRoot ?? resolveArtifactsRoot({})
       json(res, 200, listRuns(root))
+      return
+    }
+
+    // ─── 任务草稿（MVP-5 Phase I） ───────────────────────────────
+    const tparts = rest.split('/').filter(Boolean)
+    if (tparts[0] === 'tasks' && tparts.length === 1) {
+      if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+      json(res, 200, listTasks().map(publicTask))
+      return
+    }
+    if (tparts[0] === 'tasks' && tparts.length === 2) {
+      const taskId = tparts[1] ?? ''
+      const task = getTask(taskId)
+      if (!task) { json(res, 404, { error: 'task not found' }); return }
+      if (method === 'GET') {
+        json(res, 200, publicTask(task))
+        return
+      }
+      if (method === 'PATCH') {
+        const body = await readBody(req)
+        const graph = body.graph as TaskDraft['graph'] | undefined
+        const status = body.status as TaskDraft['status'] | undefined
+        const next = updateTask(taskId, {
+          ...(typeof body.userInput === 'string' ? { userInput: body.userInput } : {}),
+          ...(graph !== undefined ? { graph } : {}),
+          ...(status !== undefined ? { status } : {}),
+        })
+        if (!next) { json(res, 404, { error: 'task not found' }); return }
+        json(res, 200, publicTask(next))
+        return
+      }
+      if (method === 'DELETE') {
+        deleteTask(taskId)
+        json(res, 200, { ok: true })
+        return
+      }
+      json(res, 405, { error: 'method not allowed' })
+      return
+    }
+    if (tparts[0] === 'tasks' && tparts.length === 3) {
+      const taskId = tparts[1] ?? ''
+      const action = tparts[2] ?? ''
+      const task = getTask(taskId)
+      if (!task) { json(res, 404, { error: 'task not found' }); return }
+
+      if (method === 'POST' && action === 'start') {
+        if (!STARTABLE_STATUSES.has(task.status)) {
+          json(res, 409, { error: `任务状态不允许启动: ${task.status}` })
+          return
+        }
+        if (!task.parentAgent) {
+          json(res, 409, { error: '任务缺少 parent agent（请由主 agent 发起启动）' })
+          return
+        }
+        const started = updateTask(taskId, { status: 'running', startedAt: Date.now() })
+        const { runGraphRealTool } = await import('../../cli/graph-run-commands.js')
+        try {
+          const result = await runGraphRealTool(
+            ctx,
+            task.graph,
+            task.userInput,
+            task.parentAgent as never,
+            task.outputDir,
+          )
+          updateTask(taskId, { graphId: result.graphId, status: 'running' })
+          json(res, 200, { ok: true, taskId, graphId: result.graphId, status: 'running' })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          updateTask(taskId, { status: 'failed', error: message })
+          json(res, 500, { ok: false, error: message })
+        }
+        void started
+        return
+      }
+
+      if (method === 'POST' && action === 'cancel') {
+        const next = updateTask(taskId, { status: 'aborted' })
+        json(res, 200, next ? { ok: true, status: next.status } : { ok: false })
+        return
+      }
+
+      if (method === 'POST' && action === 'answer') {
+        const body = await readBody(req)
+        const answer = typeof body.answer === 'string' ? body.answer : ''
+        if (!task.currentChildId || !task.parentAgent) {
+          json(res, 409, { error: '任务当前没有等待回答的子代理' })
+          return
+        }
+        try {
+          await ctx.subagents.sendMessage(
+            task.parentAgent as never,
+            task.currentChildId as never,
+            [{ type: 'text', text: `[用户回答] ${answer}` }],
+            { signal: new AbortController().signal },
+          )
+          updateTask(taskId, { status: 'running' })
+          json(res, 200, { ok: true, status: 'running' })
+        } catch (error) {
+          json(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
+        return
+      }
+
+      json(res, 405, { error: 'method not allowed' })
       return
     }
 
@@ -150,10 +371,24 @@ export function registerVisualRoutes(
       return
     }
 
-    // GET /graph/:graphId/tokens
+    // GET /graph/:graphId/tokens（MVP-5 Phase E：总 + 每节点 + 每角色）
     if (tail[0] === 'tokens' && tail.length === 1) {
       if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
-      json(res, 200, { rows: tokens.rows(), total: tokens.total() })
+      const rows = tokens.rows()
+      const roleMap = new Map<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; totalTokens: number }>()
+      for (const row of rows) {
+        const agg = roleMap.get(row.role) ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalTokens: 0 }
+        agg.inputTokens += row.usage.inputTokens
+        agg.outputTokens += row.usage.outputTokens
+        agg.cacheReadTokens += row.usage.cacheReadTokens
+        agg.totalTokens += row.usage.totalTokens
+        roleMap.set(row.role, agg)
+      }
+      json(res, 200, {
+        rows,
+        total: tokens.total(),
+        byRole: [...roleMap.entries()].map(([role, usage]) => ({ role, usage })),
+      })
       return
     }
 
@@ -169,6 +404,20 @@ export function registerVisualRoutes(
       if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
       // 单图模式：checkpoint store 未全局化，返回空列表（Phase D 接真实 store）
       json(res, 200, listCheckpoints(undefined, graphId))
+      return
+    }
+
+    // GET /graph/:graphId/logs —— 结构化日志（MVP-5 Phase G）
+    if (tail[0] === 'logs' && tail.length === 1) {
+      if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+      const { readTraceLogs } = await import('./log-reader.js')
+      const root = entry?.artifactsRoot ?? resolveArtifactsRoot({})
+      const limit = Number.parseInt(query.get('limit') ?? '500', 10)
+      json(res, 200, readTraceLogs(root, graphId, {
+        limit: Number.isFinite(limit) ? limit : 500,
+        level: query.get('level') ?? undefined,
+        search: query.get('search') ?? undefined,
+      }))
       return
     }
 
@@ -197,6 +446,9 @@ export function registerVisualRoutes(
 
     json(res, 404, { error: 'not found' })
   }
+
+  // 暴露 handler 供单测直接调用（生产不受影响）
+  weaveHandler = handle
 
   // prefix 路由：/api/weave/*（内部再分发）
   disposers.push(

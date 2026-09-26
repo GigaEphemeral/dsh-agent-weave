@@ -105,6 +105,12 @@ export function compileRoleProfile(role: RoleDefinition, options: CompileOptions
         downstream: [...role.handoff.downstream],
         edge_type: role.handoff.edge_type,
       },
+      ...(role.environment !== undefined ? { environment: role.environment } : {}),
+      ...(role.output !== undefined ? { output: role.output } : {}),
+      ...(role.description !== undefined ? { description: role.description } : {}),
+      ...(role.order !== undefined ? { order: role.order } : {}),
+      ...(role.tags !== undefined ? { tags: [...role.tags] } : {}),
+      ...(role.suggests_next !== undefined ? { suggests_next: role.suggests_next } : {}),
     },
   }
 }

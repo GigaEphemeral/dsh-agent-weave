@@ -2,6 +2,15 @@
 schema_version: '1.0'
 id: R7-tester
 name: 测试员
+description: "独立编写并执行测试，回归基线对比，失败附复现。"
+order: 50
+tags:
+  - 测试
+  - 回归
+suggests_next:
+  - roleRef: R8-quality
+    label: 质量评审
+    reason: 测试通过后进入质量门
 system_prompt_ref: R7-tester/SKILL.md
 traits:
   - 怀疑
@@ -12,8 +21,8 @@ capabilities:
 tools:
   - read
 model:
-  provider: vol186coding
-  model: deepseek-v4-flash
+  provider: ollama
+  model: qwen3.5:9B
 memory_scope: private
 lifecycle: on-demand
 max_concurrent_children: 1
@@ -27,6 +36,16 @@ quality_gate:
   - 回归基线对比
   - 失败附复现
 token_budget: 2000
+output:
+  only_markdown: true
+  forbidden_extensions:
+    - .py
+    - .js
+    - .ts
+    - .html
+    - .css
+    - .bat
+    - .sh
 handoff:
   upstream:
     - R6-developer
