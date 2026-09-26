@@ -525,4 +525,23 @@ export const BOARD_CSS = `
   border-radius: 10px; padding: 1px 8px;
 }
 .override-hint { font-size: 10px; font-weight: 500; color: var(--w-text-3); }
+
+/* ══════════════════════════════════════════════════════════
+   ui修复2 §P2：边类型选择器 + 端口
+   ══════════════════════════════════════════════════════════ */
+.edge-type-options { display: flex; flex-direction: column; gap: 6px; }
+.edge-type-opt {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border: 1px solid var(--w-border); border-radius: 8px;
+  cursor: pointer; transition: all .15s var(--w-ease);
+}
+.edge-type-opt:hover { border-color: var(--w-border-strong); }
+.edge-type-opt.active { border-color: var(--w-brand); background: var(--w-brand-soft); }
+.edge-type-opt strong { font-size: 13px; min-width: 36px; }
+.edge-type-opt span { font-size: 11.5px; color: var(--w-text-3); }
+.edge-type-opt input { accent-color: var(--w-brand); }
+
+/* 节点输出端口（P2：悬停出现） */
+.node-port { transition: opacity .15s var(--w-ease); }
+.weave-board .node:hover .node-port { opacity: 1 !important; }
 `

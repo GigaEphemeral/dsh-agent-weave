@@ -134,3 +134,15 @@ export function buildGraphSpec(nodes: EditorNode[], edges: EditorEdge[]): Client
     })),
   }
 }
+
+/** 端口拖出连边的落点判定（P2 纯逻辑）：命中节点 id；同节点/空返回 null。 */
+export function resolveLinkTarget(fromId: string, toId: string | null): string | null {
+  if (!toId) return null
+  if (toId === fromId) return null
+  return toId
+}
+
+/** 20px 网格吸附（P3 纯逻辑）。 */
+export function snapToGrid(v: number, grid = 20): number {
+  return Math.round(v / grid) * grid
+}

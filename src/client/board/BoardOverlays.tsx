@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { UserQuestionModal } from '../dashboard/UserQuestionModal.js'
 import { RoleEditor } from '../dashboard/RoleEditor.js'
 import { NodeEditorModal } from '../dashboard/NodeEditorModal.js'
+import { EdgeTypePicker, type EdgePickType } from '../dashboard/EdgeTypePicker.js'
 import type { EditorNode } from '../dashboard/canvas-model.js'
 
 interface RoleEditorState { roleId?: string }
@@ -23,10 +24,12 @@ interface NodeEditorState {
     tools?: string[]
   }
 }
+interface EdgePickerState { fromId: string; toId: string }
 
 export function BoardOverlays() {
   const [roleEditor, setRoleEditor] = useState<RoleEditorState | null>(null)
   const [nodeEditor, setNodeEditor] = useState<NodeEditorState | null>(null)
+  const [edgePicker, setEdgePicker] = useState<EdgePickerState | null>(null)
 
   useEffect(() => {
     const onOpenRole = (e: Event): void => {
@@ -37,11 +40,17 @@ export function BoardOverlays() {
       const d = (e as CustomEvent<NodeEditorState>).detail
       if (d?.nodeId) setNodeEditor(d)
     }
+    const onOpenEdgePicker = (e: Event): void => {
+      const d = (e as CustomEvent<EdgePickerState>).detail
+      if (d?.fromId && d?.toId) setEdgePicker(d)
+    }
     window.addEventListener('weave:open-role-editor', onOpenRole)
     window.addEventListener('weave:open-node-editor', onOpenNode)
+    window.addEventListener('weave:open-edge-picker', onOpenEdgePicker)
     return () => {
       window.removeEventListener('weave:open-role-editor', onOpenRole)
       window.removeEventListener('weave:open-node-editor', onOpenNode)
+      window.removeEventListener('weave:open-edge-picker', onOpenEdgePicker)
     }
   }, [])
 
@@ -68,6 +77,19 @@ export function BoardOverlays() {
           onDelete={() => {
             window.dispatchEvent(new CustomEvent('weave:node-deleted', { detail: { nodeId: nodeEditor.nodeId } }))
             setNodeEditor(null)
+          }}
+        />
+      )}
+      {edgePicker && (
+        <EdgeTypePicker
+          fromId={edgePicker.fromId}
+          toId={edgePicker.toId}
+          onCancel={() => setEdgePicker(null)}
+          onPick={(pick: { type: EdgePickType; when?: string; maxIter?: number }) => {
+            window.dispatchEvent(new CustomEvent('weave:edge-created', {
+              detail: { fromId: edgePicker.fromId, toId: edgePicker.toId, ...pick },
+            }))
+            setEdgePicker(null)
           }}
         />
       )}

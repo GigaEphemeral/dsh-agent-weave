@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { effectiveRole, type NodeOverrideInput } from '../../src/l4-visual/host/effective-role'
-import { buildGraphSpec, layoutNodes, type EditorEdge, type EditorNode } from '../../src/client/dashboard/canvas-model'
+import { buildGraphSpec, layoutNodes, resolveLinkTarget, snapToGrid, type EditorEdge, type EditorNode } from '../../src/client/dashboard/canvas-model'
 import type { RoleDefinition } from '../../src/shared/types'
 
 const baseRole: RoleDefinition = {
@@ -93,6 +93,22 @@ describe('layoutNodes / buildGraphSpec（ui修复2 §P0）', () => {
     expect(spec.edges[0]).toMatchObject({ from: 'a', to: 'b', type: 'cond', when: 'x > 1' })
     expect(spec.edges[1]).toMatchObject({ type: 'loop', maxIter: 3 })
     expect(spec.nodes[0]?.override).toEqual({ capabilities: ['read'], tools: [] })
+  })
+})
+
+describe('P2/P3 纯逻辑（端口连边落点 + 网格吸附）', () => {
+  it('resolveLinkTarget：命中异节点返回 toId；同节点/空返回 null', () => {
+    expect(resolveLinkTarget('a', 'b')).toBe('b')
+    expect(resolveLinkTarget('a', 'a')).toBeNull()
+    expect(resolveLinkTarget('a', null)).toBeNull()
+    expect(resolveLinkTarget('a', '')).toBeNull()
+  })
+
+  it('snapToGrid：20px 网格吸附', () => {
+    expect(snapToGrid(37)).toBe(40)
+    expect(snapToGrid(29)).toBe(20)
+    expect(snapToGrid(24)).toBe(20)
+    expect(snapToGrid(10)).toBe(20)
   })
 })
 

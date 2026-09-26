@@ -10,7 +10,7 @@
  * - readonly：运行中锁定编辑（禁拖入/拖动/删除/双击）
  * - 导出 ClientGraphSpec（供保存 / 启动任务）
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ClientGraphSpec } from '../types'
 import {
   buildGraphSpec,
@@ -19,6 +19,8 @@ import {
   NODE_H,
   COL_X,
   ROW_Y,
+  resolveLinkTarget,
+  snapToGrid,
   type EditorEdge,
   type EditorNode,
 } from './canvas-model'
@@ -65,6 +67,10 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
   const [roles, setRoles] = useState<Array<RoleDrop>>([])
   const [suggestion, setSuggestion] = useState<{ sourceId: string; items: Array<{ roleRef: string; label?: string; reason?: string }> } | null>(null)
   const [counter, setCounter] = useState(initialGraph?.nodes.length ?? 0)
+  // P2：端口拖出连边（linking 状态 + 临时线端点）
+  const [linking, setLinking] = useState<{ fromId: string; mx: number; my: number } | null>(null)
+  const [dropIndicator, setDropIndicator] = useState<{ x: number; y: number } | null>(null)
+  const innerRef = useRef<HTMLDivElement>(null)
 
   // MVP-5B B6：角色库候选（节点编辑器 roleRef 下拉，动态拉取不硬编码）
   useEffect(() => {
@@ -89,11 +95,31 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
       if (!d?.nodeId) return
       removeNode(d.nodeId)
     }
+    // P2：端口连边结果（EdgeTypePicker 选择后派发）
+    const onEdgeCreated = (e: Event): void => {
+      const d = (e as CustomEvent<{ fromId: string; toId: string; type: EditorEdge['type']; when?: string; maxIter?: number }>).detail
+      if (!d?.fromId || !d?.toId) return
+      const es: EditorEdge[] = [
+        ...edges,
+        {
+          id: `e-${Date.now()}-${d.fromId}-${d.toId}`,
+          from: d.fromId,
+          to: d.toId,
+          type: d.type,
+          ...(d.when !== undefined ? { when: d.when } : {}),
+          ...(d.maxIter !== undefined ? { maxIter: d.maxIter } : {}),
+        },
+      ]
+      setEdges(es)
+      emit(nodes, es)
+    }
     window.addEventListener('weave:node-saved', onNodeSaved)
     window.addEventListener('weave:node-deleted', onNodeDeleted)
+    window.addEventListener('weave:edge-created', onEdgeCreated)
     return () => {
       window.removeEventListener('weave:node-saved', onNodeSaved)
       window.removeEventListener('weave:node-deleted', onNodeDeleted)
+      window.removeEventListener('weave:edge-created', onEdgeCreated)
     }
   }, [nodes, edges])
 
@@ -160,12 +186,21 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
     emit(ns, es)
   }
 
+  // P3：20px 网格吸附（纯函数 snapToGrid）
+  const onDragOver = (e: React.DragEvent): void => {
+    e.preventDefault()
+    if (readonly) return
+    const rect = innerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setDropIndicator({ x: snapToGrid(e.clientX - rect.left - NODE_W / 2), y: snapToGrid(e.clientY - rect.top - NODE_H / 2) })
+  }
+
   const onDrop = (e: React.DragEvent): void => {
     e.preventDefault()
     if (readonly) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const x = e.clientX - rect.left - NODE_W / 2
-    const y = e.clientY - rect.top - NODE_H / 2
+    const rect = innerRef.current?.getBoundingClientRect()
+    const x = snapToGrid(e.clientX - (rect?.left ?? 0) - NODE_W / 2)
+    const y = snapToGrid(e.clientY - (rect?.top ?? 0) - NODE_H / 2)
     const roleData = e.dataTransfer.getData('application/weave-role')
     const nodeData = e.dataTransfer.getData('application/weave-node')
     if (roleData) {
@@ -181,9 +216,34 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
       setNodes(moved)
       emit(moved, edges)
     }
+    setDropIndicator(null)
   }
 
   const selected = positioned.find((n) => n.id === selectedId) ?? null
+
+  // P2：端口拖出连边（linking 模式；mouseup 判定落点 → 弹 EdgeTypePicker）
+  const onPortDown = (fromId: string, e: React.MouseEvent): void => {
+    e.stopPropagation()
+    e.preventDefault()
+    if (readonly) return
+    setLinking({ fromId, mx: e.clientX, my: e.clientY })
+    const onMove = (ev: MouseEvent): void => {
+      setLinking((prev) => (prev ? { ...prev, mx: ev.clientX, my: ev.clientY } : prev))
+    }
+    const onUp = (ev: MouseEvent): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      const targetEl = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-node-id]')
+      const toId = targetEl?.getAttribute('data-node-id')
+      setLinking(null)
+      const resolved = resolveLinkTarget(fromId, toId ?? null)
+      if (resolved) {
+        window.dispatchEvent(new CustomEvent('weave:open-edge-picker', { detail: { fromId, toId: resolved } }))
+      }
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
 
   return (
     <div style={{ position: 'relative', width: '100%', minHeight: 260, height: '100%', border: '1px dashed #ccc', borderRadius: 8, background: '#fafafa', overflow: 'hidden' }}>
@@ -225,16 +285,32 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
             </g>
           )
         })}
+        {/* P2：linking 临时线（端口 → 鼠标） */}
+        {linking && (() => {
+          const from = positioned.find((n) => n.id === linking.fromId)
+          if (!from) return null
+          const rect = innerRef.current?.getBoundingClientRect()
+          const originX = from.x + NODE_W / 2
+          const originY = from.y + NODE_H / 2
+          const mx = rect ? linking.mx - rect.left : originX
+          const my = rect ? linking.my - rect.top : originY
+          return (
+            <line x1={originX} y1={originY} x2={mx} y2={my} stroke="#4f46e5" strokeWidth={2} strokeDasharray="4 4" />
+          )
+        })()}
       </svg>
 
       <div
+        ref={innerRef}
         style={{ position: 'absolute', inset: 0 }}
-        onDragOver={(e) => e.preventDefault()}
+        onDragOver={onDragOver}
+        onDragLeave={() => setDropIndicator(null)}
         onDrop={onDrop}
       >
         {positioned.map((n) => (
           <div
             key={n.id}
+            data-node-id={n.id}
             draggable={!readonly}
             onDragStart={(e) => {
               e.dataTransfer.setData('application/weave-node', n.id)
@@ -268,6 +344,9 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
             <span style={{ color: '#64748b' }}>{n.id}</span>
             {n.modelOverride && <span style={{ color: '#8b5cf6' }}>⚙ {n.modelOverride}</span>}
             {n.approval && <span style={{ color: '#f59e0b' }}>✓ 需审批</span>}
+            {n.override && Object.keys(n.override).length > 0 && (
+              <span style={{ color: '#4f46e5' }}>⚡ 覆盖</span>
+            )}
             {!readonly && (
               <button
                 style={{ position: 'absolute', top: 2, right: 2, border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer' }}
@@ -276,12 +355,36 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
                 ×
               </button>
             )}
+            {/* P2：输出端口（悬停出现；端口拖出连边） */}
+            {!readonly && (
+              <span
+                className="node-port"
+                onMouseDown={(e) => onPortDown(n.id, e)}
+                title={`从 ${n.id} 拖出连线`}
+                style={{
+                  position: 'absolute', right: -5, top: '50%', transform: 'translateY(-50%)',
+                  width: 10, height: 10, borderRadius: '50%', background: '#4f46e5',
+                  border: '2px solid #fff', cursor: 'crosshair', opacity: 0,
+                  boxShadow: '0 0 0 1px rgba(79,70,229,.4)',
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLSpanElement).style.opacity = '1' }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLSpanElement).style.opacity = '0' }}
+              />
+            )}
           </div>
         ))}
         {nodes.length === 0 && !readonly && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: 13 }}>
             从左侧角色库拖入角色，开始编排
           </div>
+        )}
+        {/* P3：拖放落点指示 */}
+        {dropIndicator && (
+          <div style={{
+            position: 'absolute', left: dropIndicator.x - 6, top: dropIndicator.y - 6,
+            width: 12, height: 12, borderRadius: '50%', background: 'rgba(79,70,229,.35)',
+            border: '2px solid #4f46e5', pointerEvents: 'none',
+          }} />
         )}
       </div>
 
