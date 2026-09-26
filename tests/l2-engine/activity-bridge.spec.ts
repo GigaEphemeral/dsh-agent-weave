@@ -88,8 +88,8 @@ describe('实时活动桥接', () => {
       )
       expect(r.success).toBe(true)
       expect(emitted.length).toBeGreaterThanOrEqual(1)
-      expect(existsSync(join(root, 'graph-artifacts', 'dev', 'dev.md'))).toBe(true)
-      expect(readFileSync(join(root, 'graph-artifacts', 'dev', 'dev.md'), 'utf8')).toContain('产出-R6-developer')
+      expect(existsSync(join(root, 'dev', 'dev.md'))).toBe(true)
+      expect(readFileSync(join(root, 'dev', 'dev.md'), 'utf8')).toContain('产出-R6-developer')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

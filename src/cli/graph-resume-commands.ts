@@ -15,6 +15,8 @@ import { getGlobalTokens } from '../l4-visual/host/visual-runtime.js'
 import { getGlobalLedger } from './graph-run-commands.js'
 import { readPauseSnapshot, removePauseSnapshot } from '../l2-engine/pause-snapshot.js'
 import { resolveExecWorkspace } from './graph-commands.js'
+import { ProjectMemory } from '../l2-engine/project-memory.js'
+import { scanHandoffEnvelopes } from '../l2-engine/handoff.js'
 import type { PauseSnapshot } from '../l2-engine/types.js'
 
 /** 从暂停快照恢复图（异步后台跑）。 */
@@ -56,9 +58,16 @@ export async function resumeGraphRealTool(
     }
   }
 
-  // 重建图（复用 spec + 恢复 childSessions）
+  // 重建图（复用 spec + 恢复 childSessions + 从 handoff.json 重建 projectMemory）
   const bus = setGlobalBus(graphId)
   bus.handle({ type: 'graph/start', graphId, timestamp: Date.now() })
+
+  // MVP-5B B2：恢复场景从 productions/*/handoff.json 重建项目记忆（下游 prompt 仍能读到上游交接单）
+  const projectMemory = new ProjectMemory({ artifactsRoot: root })
+  for (const { nodeId, envelope } of scanHandoffEnvelopes(root)) {
+    projectMemory.mergeEnvelope(nodeId, envelope)
+  }
+
   const graph = createStateGraph<Record<string, unknown>>(
     ctx,
     spec.maxIterations ?? 25,
@@ -67,6 +76,8 @@ export async function resumeGraphRealTool(
     (evt) => bus.handle(evt),
     getGlobalLedger(),
     getGlobalTokens(),
+    undefined,
+    projectMemory, // MVP-5B B2：恢复后的交接单注入
   )
 
   for (const node of spec.nodes) {

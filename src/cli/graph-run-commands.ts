@@ -78,7 +78,7 @@ export async function runGraphRealTool(
       getGlobalLedger(),        // P1-1：RunLedger
       getGlobalTokens(),        // P1-2：Token 分账（真实数值）
       undefined,                // observer（MVP-4 P4.B.7 预留位）
-      new ProjectMemory(),      // MVP-5 问题 4：项目事实共享（跨节点注入/收集）
+      new ProjectMemory({ artifactsRoot: root }), // MVP-5B B2：交接单共享（artifactsRoot 供相对路径补全）
   )
 
   // P4.A.4：注册 spec/roleMap 供 REST 读取

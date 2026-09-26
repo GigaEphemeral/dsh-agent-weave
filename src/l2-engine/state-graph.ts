@@ -38,7 +38,8 @@ import { validateNodeOutput } from './node-validator.js'
 import { getGraphControl, clearGraphControl } from './graph-control.js'
 import { classifyError } from './error-classifier.js'
 import { writePauseSnapshot } from './pause-snapshot.js'
-import { ProjectMemory, extractFactsFromMarkdown } from './project-memory.js'
+import { ProjectMemory } from './project-memory.js'
+import { parseHandoffFromMarkdown, writeHandoffJson } from './handoff.js'
 import { runPreflightChecks, type PreflightCheck } from './environment-gate.js'
 import { checkOutputGate, type OutputGateOptions } from './output-gate.js'
 import { waitForSubagentEnd, PauseError } from './subagent-waiter.js'
@@ -296,8 +297,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
         const upstreamSummary = upstreamArtifacts
           ? Object.entries(upstreamArtifacts).map(([n, p]) => `[${n}] ${p}`).join('\n')
           : '（无上游产物）'
-        // MVP-5 问题 4：上游已确认事实注入（下游不再重复探测）
-        const factsSection = projectMemory ? projectMemory.toPromptSection() : ''
+        // MVP-5B B2：上游交接单注入（buildHandoffSection：产物契约/已验证事实/未满足/指派问题）
+        const handoffSection = projectMemory ? projectMemory.toPromptSection(options.provider) : ''
         // 通道 C（问题 5）：行为约束——子代理每步输出 [动作]，供观测"在干什么"
         let prompt = (options.promptTemplate ??
           '以 {{provider}} 角色完成任务：\n{{user_input}}\n\n上游产物：\n{{upstream}}\n\n' +
@@ -305,13 +306,13 @@ export function createStateGraph<T extends Record<string, unknown>>(
           .replaceAll('{{provider}}', options.provider)
           .replaceAll('{{user_input}}', String((state.user_input as string | undefined) ?? ''))
           .replaceAll('{{upstream}}', upstreamSummary)
-        // facts 有占位则填充；无占位则在末尾追加（保证下游总能看到上游事实）
-        if (factsSection) {
-          prompt = prompt.includes('{{facts}}')
-            ? prompt.replaceAll('{{facts}}', factsSection)
-            : prompt + '\n\n' + factsSection
+        // 交接单有占位则填充；无占位则在末尾追加（保证下游总能看到上游交接单）
+        if (handoffSection) {
+          prompt = prompt.includes('{{handoff}}')
+            ? prompt.replaceAll('{{handoff}}', handoffSection)
+            : prompt + '\n\n' + handoffSection
         } else {
-          prompt = prompt.replaceAll('{{facts}}', '')
+          prompt = prompt.replaceAll('{{handoff}}', '')
         }
         const startAt = Date.now()
         // 问题 2 定位日志①：start 调用前（确认参数与 provider 解析路径）
@@ -434,20 +435,27 @@ export function createStateGraph<T extends Record<string, unknown>>(
           elapsedMs: Date.now() - startAt,
         })
 
-        // 产物落盘（artifactsRoot 传入且配置 artifactName 时）
+        // 产物落盘（artifactsRoot 传入且配置 artifactName 时；MVP-5B：节点目录 = <artifactsRoot>/<node>）
         const patch: Record<string, unknown> = {
           messages: [{ role: options.provider, node: name, at: Date.now(), stopReason: result.stopReason }],
         }
         if (options.artifactName && artifactsRoot) {
-          const nodeDir = join(artifactsRoot, 'graph-artifacts', name)
+          const nodeDir = join(artifactsRoot, name)
           mkdirSync(nodeDir, { recursive: true })
           const file = join(nodeDir, options.artifactName)
           writeFileSync(file, text, 'utf8')
           patch.artifacts = { [name]: file }
-          // MVP-5 问题 4：解析产物 YAML front-matter facts → 共享到下游 prompt
+          // MVP-5B B2：产物 front-matter → 完整 envelope → 写 handoff.json + 合并入 projectMemory
           if (projectMemory) {
-            const facts = extractFactsFromMarkdown(text, options.provider)
-            if (facts.length > 0) projectMemory.setFacts(facts)
+            const envelope = parseHandoffFromMarkdown(text, {
+              graphId: nodeCtx.graphId,
+              nodeId: name,
+              roleRef: options.provider,
+              artifactsRoot,
+              artifactAbsolutePath: file,
+            })
+            writeHandoffJson(nodeDir, envelope)
+            projectMemory.mergeEnvelope(name, envelope)
           }
           // MVP-5 问题 1/3：Output Gate（角色职责越界扫描，只校验节点自身产物）
           const outputResult = checkOutputGate(options.outputGate, file, text)

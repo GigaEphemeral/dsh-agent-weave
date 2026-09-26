@@ -40,7 +40,7 @@ describe('Output Gate（问题 1/3）', () => {
   it('设计评审类角色产出 .md 通过', () => {
     const r = checkOutputGate(
       { only_markdown: true, forbidden_extensions: ['.py', '.ts'] },
-      'graph-artifacts/requirement/requirement.md',
+      'requirement/requirement.md',
       '# 需求文档',
     )
     expect(r.passed).toBe(true)
@@ -49,7 +49,7 @@ describe('Output Gate（问题 1/3）', () => {
   it('R1 越界产出 .py → 失败', () => {
     const r = checkOutputGate(
       { only_markdown: true, forbidden_extensions: ['.py', '.ts', '.bat'] },
-      'graph-artifacts/requirement/app.py',
+      'requirement/app.py',
       'print(1)',
     )
     expect(r.passed).toBe(false)

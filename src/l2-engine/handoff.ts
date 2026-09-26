@@ -16,7 +16,7 @@
  * - fromLegacyHandoff：旧 Handoff → 新 HandoffEnvelope
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import {
   parseFrontMatter,
@@ -374,6 +374,30 @@ export function readHandoffJson(nodeDir: string): HandoffEnvelope | null {
   } catch {
     return null
   }
+}
+
+/**
+ * 扫描产物根下全部节点目录的 handoff.json（恢复场景重建 projectMemory 用，B2）。
+ * @param root 产物根目录（如 productions/）
+ * @returns 按 at 升序的 { nodeId, envelope } 列表；目录不存在/无 handoff.json 返回 []
+ */
+export function scanHandoffEnvelopes(
+  root: string,
+): Array<{ nodeId: string; envelope: HandoffEnvelope }> {
+  let entries: string[]
+  try {
+    entries = readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+  } catch {
+    return []
+  }
+  const found: Array<{ nodeId: string; envelope: HandoffEnvelope }> = []
+  for (const name of entries) {
+    const envelope = readHandoffJson(join(root, name))
+    if (envelope) found.push({ nodeId: name, envelope })
+  }
+  return found.sort((a, b) => a.envelope.at - b.envelope.at)
 }
 
 // 类型仅作 re-export 便利（供调用方一处导入）

@@ -86,9 +86,9 @@ describe('P3.F 端到端', () => {
       })
       expect(r.success).toBe(true)
       expect(calls).toEqual(['R1-requirement', 'R6-developer'])
-      // 产物落盘
-      expect(existsSync(join(root, 'graph-artifacts', 'req', 'prd.md'))).toBe(true)
-      expect(existsSync(join(root, 'graph-artifacts', 'dev', 'main.py'))).toBe(true)
+      // 产物落盘（MVP-5B：节点目录 = <root>/<node>，无 graph-artifacts 层）
+      expect(existsSync(join(root, 'req', 'prd.md'))).toBe(true)
+      expect(existsSync(join(root, 'dev', 'main.py'))).toBe(true)
       // handoff
       const h = createHandoff({ summary: 'PRD 完成', artifacts: ['art://prd.md'], roleId: 'R1-requirement', nodeId: 'req', graphId: 'g', graphVersion: '0.1.0' })
       expect(handoffToText(h)).toContain('PRD 完成')

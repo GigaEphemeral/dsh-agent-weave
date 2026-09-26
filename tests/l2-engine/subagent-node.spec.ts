@@ -84,8 +84,8 @@ describe('P3.A.1 + 问题三 addSubagent（continuable）', () => {
       expect(calls).toHaveLength(1)
       expect(calls[0]?.provider).toBe('R6-developer')
       expect(calls[0]?.prompt).toContain('写个计算器')
-      // 产物落盘（经 subagent/end 事件输出）
-      const file = join(root, 'graph-artifacts', 'dev', 'main.ts')
+      // 产物落盘（MVP-5B：节点目录 = <root>/<node>，无 graph-artifacts 层）
+      const file = join(root, 'dev', 'main.ts')
       expect(existsSync(file)).toBe(true)
       expect(readFileSync(file, 'utf8')).toContain('产出-R6-developer')
       // State 映射
