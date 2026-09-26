@@ -38,28 +38,69 @@ metadata:
 - 如果你调用 `subagent`，会被记录为违规，任务视为失败。
 
 **为什么**：本角色定位是"单点执行"，委派会破坏 token 预算、丢失上下文、违反工作流设计。
-## 输出规范（MVP-5 Facts 契约）
+## 输出规范（交接单 front-matter 契约）
 
-你的产出物（唯一文件）最顶部必须包含以下 YAML front-matter，声明你探测/确认过的项目事实：
+你的产出物（唯一文件）最顶部必须包含以下 YAML front-matter，声明你的交接单（引擎自动解析并补全 hash/sizeBytes/source）：
 
 ```yaml
 ---
 facts:
-  - key: env.python.version
-    category: environment
-    value: "3.14.6"
-    confidence: confirmed
-    summary: "Python 3.14.6 已安装"
-  - key: api.tencent.qt.status
-    category: api
-    value: available
-    confidence: confirmed
-    summary: "腾讯行情 API 可达"
+  - key: <domain>.<entity>.<attr>
+    category: environment | api | constraint | file-system | reference | other
+    value: "<探测或判断的结果>"
+    confidence: confirmed | assumed
+    summary: "<自然语言摘要>"
+
+artifacts:
+  - path: <相对本文件的路径>
+    kind: doc | code | test | script | config | data
+    summary: "<摘要>"
+    contract: |
+      <下游必须遵守的约束，可多行>
+
+environment:
+  verified:
+    - key: <同上三层命名>
+      value: "<探测结果>"
+      cmd: "<探测方式>"
+  unmet:
+    - key: <同上三层命名>
+      required: "<要求>"
+      suggestion: "<建议>"
+      blocking: [<下游节点 ID 列表>]
+
+openIssues:
+  - id: <唯一 ID>
+    severity: blocker | warning | info
+    summary: "<问题>"
+    evidence: "<日志/命令输出>"
+    suggestedOwner: <角色 ID 或 "user">
+    blocking: [<下游节点 ID 列表>]
 ---
 ```
 
-- key 点分命名：env.* / api.* / constraint.* / file-system.* / reference.*
-- category 取值：environment | api | constraint | file-system | reference | other
-- confidence：confirmed（已实测）/ assumed（推断）
-- 只记录你实际探测/确认过的事实；未探测的不要写
-- 下游会收到“项目事实（上游已确认，请不要重复探测）”注入，禁止重复探测同 key 事实
+- 环境事实键名三层：`<domain>.<entity>.<attr>`；API 事实三层：`<service>.<resource>.<status>`；约束两层：`<scope>.<constraint>`；无法归类 `category: other`
+- 只记录你实际探测/确认过的内容；未探测的不要写
+- 引擎自动补全 artifacts 的 hash/sizeBytes 与 facts/verified 的 source，你无需填写
+
+## 【必读】上游交接单
+
+启动第一件事：读 `productions/<上游节点>/handoff.json`（引擎也会自动注入到你的 prompt）。
+
+重点看：
+- **artifacts[].contract**：上游交付的契约，你的产出必须遵守
+- **environment.verified**：已确认的事实，**禁止重复探测**
+- **environment.unmet**：已知未满足，遇到必须停下来问，**禁止静默降级**
+- **openIssues.suggestedOwner == "<你的角色>"**：**你必须处理**
+
+## 【必写】你的交接单
+
+在产出文件的 YAML front-matter 里声明（引擎自动解析补全）。
+
+约定：
+- **环境事实** 键名用三层：`<domain>.<entity>.<attr>`
+- **API 事实** 键名用三层：`<service>.<resource>.<status>`
+- **约束** 键名用两层：`<scope>.<constraint>`
+- 无法归类时 `category: other`
+
+完整字段见引擎文档。
