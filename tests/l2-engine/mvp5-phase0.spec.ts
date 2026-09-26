@@ -1,6 +1,10 @@
 /**
  * MVP-5 Phase 0：Output Gate + 图级约束（SOP 顺序/独立验证）+ 错误分类映射。
+ * MVP-5B B3：Output Gate 扫描回写（scannedArtifacts 补 hash/size）。
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { checkOutputGate } from '../../src/l2-engine/output-gate'
 import { validateGraph, validateGraphConstraints, canReach } from '../../src/l2-engine/static-validator'
@@ -67,6 +71,32 @@ describe('Output Gate（问题 1/3）', () => {
 
   it('未配置 gate 直接通过', () => {
     expect(checkOutputGate(undefined, 'a.py', 'code').passed).toBe(true)
+  })
+
+  it('B3：扫描节点目录产物 → scannedArtifacts 补 hash/sizeBytes（排除 handoff.json）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'weave-og-'))
+    try {
+      const nodeDir = join(root, 'node-a')
+      mkdirSync(nodeDir, { recursive: true })
+      writeFileSync(join(nodeDir, 'a.md'), '# 产物', 'utf8')
+      writeFileSync(join(nodeDir, 'data.json'), '{}', 'utf8')
+      writeFileSync(join(nodeDir, 'handoff.json'), '{}', 'utf8') // 应被排除
+      const r = checkOutputGate({ only_markdown: true }, join(nodeDir, 'a.md'), '# 产物', {
+        nodeDir,
+        artifactsRoot: root,
+      })
+      expect(r.passed).toBe(true)
+      const paths = r.scannedArtifacts.map((a) => a.path)
+      expect(paths).toContain('node-a/a.md')
+      expect(paths).toContain('node-a/data.json')
+      expect(paths).not.toContain('node-a/handoff.json')
+      const md = r.scannedArtifacts.find((a) => a.path.endsWith('a.md'))
+      expect(md?.kind).toBe('doc')
+      expect(md?.hash).toMatch(/^[0-9a-f]{16}$/)
+      expect(md?.sizeBytes).toBe(Buffer.byteLength('# 产物', 'utf8'))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

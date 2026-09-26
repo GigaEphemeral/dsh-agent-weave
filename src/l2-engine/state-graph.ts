@@ -39,7 +39,7 @@ import { getGraphControl, clearGraphControl } from './graph-control.js'
 import { classifyError } from './error-classifier.js'
 import { writePauseSnapshot } from './pause-snapshot.js'
 import { ProjectMemory } from './project-memory.js'
-import { parseHandoffFromMarkdown, writeHandoffJson } from './handoff.js'
+import { parseHandoffFromMarkdown, readHandoffJson, writeHandoffJson } from './handoff.js'
 import { runPreflightChecks, type PreflightCheck } from './environment-gate.js'
 import { checkOutputGate, type OutputGateOptions } from './output-gate.js'
 import { waitForSubagentEnd, PauseError } from './subagent-waiter.js'
@@ -292,7 +292,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
         // 问题三 D1：输入门禁（上游产物存在且非空；缺失 → 抛错 → 图停）
         checkInputGate(options.inputGate, state, name)
         // MVP-5 问题 2：Environment Gate 前置检查（环境不满足 → 暂停，不静默降级）
-        await runPreflightChecks(options.environmentPreflight, { nodeName: name })
+        // MVP-5B B3：捕获 PreflightResult（verified 引擎实测，回写本节点 handoff）
+        const preflight = await runPreflightChecks(options.environmentPreflight, { nodeName: name })
         const upstreamArtifacts = state.artifacts as Record<string, string> | undefined
         const upstreamSummary = upstreamArtifacts
           ? Object.entries(upstreamArtifacts).map(([n, p]) => `[${n}] ${p}`).join('\n')
@@ -454,11 +455,33 @@ export function createStateGraph<T extends Record<string, unknown>>(
               artifactsRoot,
               artifactAbsolutePath: file,
             })
+            // MVP-5B B3：环境门禁引擎实测的 verified 回写进本节点 envelope
+            // （下游"禁止重复探测"；同 key 引擎实测覆盖 LLM 声明）
+            if (preflight.verified.length > 0) {
+              const byKey = new Map(envelope.environment.verified.map((v) => [v.key, v]))
+              for (const v of preflight.verified) byKey.set(v.key, v)
+              envelope.environment.verified = [...byKey.values()]
+            }
             writeHandoffJson(nodeDir, envelope)
             projectMemory.mergeEnvelope(name, envelope)
           }
-          // MVP-5 问题 1/3：Output Gate（角色职责越界扫描，只校验节点自身产物）
-          const outputResult = checkOutputGate(options.outputGate, file, text)
+          // MVP-5 问题 1/3：Output Gate（角色职责越界扫描，只校验节点自身产物目录）
+          const outputResult = checkOutputGate(options.outputGate, file, text, {
+            nodeDir,
+            artifactsRoot,
+          })
+          // MVP-5B B3：扫描到的产物（hash/size 引擎补全）回写进 envelope.artifacts
+          if (projectMemory && outputResult.scannedArtifacts.length > 0) {
+            const envelope = readHandoffJson(nodeDir)
+            if (envelope) {
+              const known = new Set(envelope.artifacts.map((a) => a.path))
+              for (const a of outputResult.scannedArtifacts) {
+                if (!known.has(a.path)) envelope.artifacts.push(a)
+              }
+              writeHandoffJson(nodeDir, envelope)
+              projectMemory.mergeEnvelope(name, envelope)
+            }
+          }
           if (!outputResult.passed) {
             const err = new Error('输出门禁未过（节点 ' + name + '）: ' + outputResult.failures.join('; '))
             logger.warn('weave-addsubagent', '输出门禁未过，节点失败（整图终止）', { node: name, failures: outputResult.failures })
