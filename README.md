@@ -105,12 +105,13 @@ MVP-0 角色资产 ──▶ MVP-1 单链验证 ──▶ MVP-2 StateGraph 引�
 
 ## 交互方式
 
-1. **输入需求**：聊天中一句话需求 → 主 agent 调 `weave_propose_task` → SSE `task-proposed` → 右侧编辑面板自动滑出（常驻挂载，不依赖看板开关）。
-2. **画布编排**：拖入角色节点、点击连线、推荐下一步、双击节点弹编辑器、配置门禁/模型/审批。
-3. **角色创建/编辑**：角色库 `+ 新建` / `⚙ 编辑` → 角色编辑器 → 保存落盘 `roles/<id>.yaml` → 角色库立即可见。
-4. **实时看板**：图节点实时染色、节点活动、Token 分账、审批、观察者信号、**交接单查看器**。
-5. **人工审批**：审批门 / 用户确认弹窗（`ask_user_question` 链路），暂停时用户回答后恢复。
-6. **运行控制**：暂停/恢复/终止；从 checkpoint 或暂停快照恢复。
+1. **输入需求**：聊天中一句话需求 → 主 agent 调 `weave_propose_task` → SSE `task-proposed` → **看板自动打开 → 编排 Tab**（状态驱动）。
+2. **画布编排**：拖入角色节点、点击连线、推荐下一步、双击节点弹浮层编辑器、配置门禁/模型/审批；运行中只读锁定。
+3. **角色创建/编辑**：角色库 `+ 新建` / `⚙ 编辑` → 角色编辑器浮层 → 保存落盘 `roles/<id>.yaml` → 角色库刷新。
+4. **开始工作**：编排 Tab 点【开始工作】→ **自动切到运行 Tab**，实时活动流 + 状态卡片 + Token/审批/信号。
+5. **图完成**：运行 Tab 顶部绿色横幅「查看产物 →」→ 产物 Tab（交接单主区）。
+6. **人工审批/暂停**：用户确认弹窗浮层（不切 Tab）；工具栏可暂停/恢复/终止。
+7. **历史与恢复**：历史 Tab 查看运行历史/已保存图/恢复点。
 
 ---
 
@@ -155,19 +156,31 @@ MVP-0 角色资产 ──▶ MVP-1 单链验证 ──▶ MVP-2 StateGraph 引�
 │   │   │   └── html-report.ts / terminal-view.ts / loop-detector.ts
 │   │   └── shared/              # 事件 schema
 │   ├── client/                  # 前端（React，esbuild 打包）
-│   │   ├── index.tsx            # 入口：页头按钮 + 看板 + shell.overlay 常驻挂载（编辑面板/确认弹窗）
-│   │   ├── dashboard/
-│   │   │   ├── CanvasEditor.tsx #   画布（拖入/连线/推荐/节点编辑器）
-│   │   │   ├── RoleLibraryPanel.tsx # 角色库（+新建/⚙编辑）
-│   │   │   ├── RoleEditor.tsx   #   [B6] 角色编辑器（动态候选）
-│   │   │   ├── HandoffViewer.tsx #  [B6] 交接单查看器
-│   │   │   ├── WeaveEditPanel.tsx # 右侧滑出编辑面板（主区挤压 + 进入即 drafting）
-│   │   │   ├── UserQuestionModal.tsx / WeaveTaskPanel.tsx / WeaveDashboardView.tsx
-│   │   │   ├── GraphCanvas.tsx / ControlBar.tsx / TokenPanel.tsx / ApprovalPanel.tsx
-│   │   │   └── SignalPanel.tsx / MessageFlowPanel.tsx / NodeActivityPanel.tsx
-│   │   │   └── RunHistoryPanel.tsx / RestorePanel.tsx / canvas-model.ts
-│   │   ├── hooks/               # useGraphStream / useActivityFeed
-│   │   └── state/ types.ts      # 看板类型
+│   │   ├── index.tsx            # 入口：WeaveBoard + BoardOverlays（shell.overlay 浮层）+ 全局 SSE → board-state
+│   │   ├── board/               # 4-Tab 全屏工作台（MVP-5B UI 重构）
+│   │   │   ├── WeaveBoard.tsx   #   工作台壳（Toolbar + Tabs + 4 Pane）
+│   │   │   ├── BoardToolbar.tsx #   状态标题 + 按 phase 上下文按钮（开始/暂停/恢复/终止/保存）
+│   │   │   ├── BoardTabs.tsx    #   编排/运行/产物/历史 Tab（状态驱动自动切）
+│   │   │   ├── BoardOverlays.tsx#   浮层容器（用户确认/角色编辑/节点编辑，CustomEvent 解耦）
+│   │   │   ├── ActivityStream.tsx # 实时活动流（历史日志 + SSE）
+│   │   │   ├── board-styles.ts  #   看板样式（CSS 字符串注入 <style>）
+│   │   │   └── panes/
+│   │   │       ├── CanvasPane.tsx    # 编排：角色库 + 画布（运行中只读）
+│   │   │       ├── RuntimePane.tsx   # 运行：状态/Token/审批/信号/消息流/活动流
+│   │   │       ├── ArtifactsPane.tsx # 产物：产物清单 + 交接单主区
+│   │   │       └── HistoryPane.tsx   # 历史：运行历史 + 已保存图 + 恢复点
+│   │   ├── dashboard/           # 复用组件（精简后）
+│   │   │   ├── CanvasEditor.tsx #   画布（readonly 支持，双击/⚙ → 事件派发）
+│   │   │   ├── RoleLibraryPanel.tsx # 角色库（readonly + 事件派发）
+│   │   │   ├── RoleEditor.tsx   #   角色编辑器（动态候选）
+│   │   │   ├── NodeEditorModal.tsx # 节点编辑器浮层（从 CanvasEditor 抽出）
+│   │   │   ├── HandoffViewer.tsx #  交接单查看器
+│   │   │   ├── UserQuestionModal.tsx / TokenPanel.tsx / ApprovalPanel.tsx
+│   │   │   └── SignalPanel.tsx / MessageFlowPanel.tsx / RestorePanel.tsx / RunHistoryPanel.tsx
+│   │   │   └── canvas-model.ts
+│   │   ├── hooks/               # useGraphStream / useActivityFeed / useTabRouter
+│   │   ├── state/               # board-state（当前 task/graphId/activeTab 唯一真相源）+ types
+│   │   └── components/ErrorBoundary.tsx
 │   ├── l5-observability/        # run-ledger / token-collector
 │   └── observers/               # observer-l1 / observer-l2 / signal
 ├── roles/                       # 6 个角色 YAML（R1/R2/R4/R6/R7/R8）
@@ -250,9 +263,13 @@ MVP-0 角色资产 ──▶ MVP-1 单链验证 ──▶ MVP-2 StateGraph 引�
 
 ### Web 看板与交互
 
-- **常驻挂载**（决策 #8）：编辑面板 + 用户确认弹窗挂 `shell.overlay`，不依赖看板开关。
-- **主区挤压**（决策 #7）：面板打开时 `body.weave-panel-open` → 主区 margin-right 720px，主 agent 仍可见。
-- **进入即 drafting**（决策 #9）：面板打开即 PATCH 任务状态。
+- **4-Tab 全屏工作台**（MVP-5B UI 重构）：编排 / 运行 / 产物 / 历史，替代 MVP-4 的 9 面板 grid。
+  - 编排 Tab 纯净（角色库 + 画布），运行中只读（黄色横幅锁定）
+  - 运行 Tab 只读监控（状态卡片 / Token / 审批 / 信号 / 消息流 / 活动流），完成时绿色横幅「查看产物 →」
+  - 产物 Tab：产物清单 + 交接单主区
+  - 历史 Tab：运行历史 + 已保存图 + 恢复点
+- **状态驱动**（`board-state` 唯一真相源）：task-proposed → 自动开看板切编排；graph-start → 自动切运行；完成 → 绿色横幅。
+- **浮层解耦**（`BoardOverlays` + CustomEvent）：用户确认 / 角色编辑 / 节点编辑统一挂 `shell.overlay`，不依赖 Tab。
 - **动态候选**（B6 反例）：前端 provider/model/capabilities/tools 全部来自 REST 探测，0 硬编码。
 
 ---
@@ -267,7 +284,9 @@ MVP-0 角色资产 ──▶ MVP-1 单链验证 ──▶ MVP-2 StateGraph 引�
 | 交接单载体 | ✅ front-matter 而非独立 JSON（LLM 更熟悉，文件随 md 移动） |
 | unmet 合并 | ✅ **累积式**（用户决策：prev 未解决继续传递，curr verified 同 key 才移除） |
 | 产物目录 | ✅ `productions/<节点>/`（用户决策：无 graph-artifacts 中间层，与文档验收一致） |
-| 面板常驻 | ✅ shell.overlay 常驻挂载（真实 Slot 树；设计文档的 app.root 为占位） |
+| 面板形态 | ✅ 4-Tab 全屏工作台（编排/运行/产物/历史），替代抽屉与 9 面板 grid |
+| 状态驱动 | ✅ board-state 唯一真相源，task-proposed/graph-start 自动切 Tab |
+| 浮层解耦 | ✅ BoardOverlays + CustomEvent 挂 shell.overlay（角色/节点/用户确认），不依赖 Tab |
 | 前端候选值 | ✅ 全动态探测，0 硬编码 provider id / 工具名 |
 | 依赖方向 | ✅ 严格单向：handoff-schema ← handoff ← project-memory ← state-graph |
 | 兼容层 | ✅ 旧 API（Handoff 四字段 / setFact 等）保留为 deprecated 转发 |
