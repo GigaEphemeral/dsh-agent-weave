@@ -1,8 +1,11 @@
 /**
- * 角色库面板（MVP-5 Phase A：描述/排序/搜索；MVP-5B B6：+ 新建 + ⚙ 编辑）。
+ * 角色库面板（MVP-5 Phase A：描述/排序/搜索；MVP-5B UI 重构：readonly + 事件派发）。
+ *
+ * - + 新建 / ⚙ 编辑 → 派发 weave:open-role-editor（BoardOverlays 渲染 RoleEditor）
+ * - 监听 weave:roles-changed 刷新列表（角色保存后）
+ * - readonly：运行中隐藏新建/编辑入口
  */
 import { useEffect, useState } from 'react'
-import { RoleEditor } from './RoleEditor'
 
 export interface RoleLibraryEntry {
   id: string
@@ -19,11 +22,10 @@ export interface DraggableRole {
   suggests_next?: RoleLibraryEntry['suggests_next']
 }
 
-export function RoleLibraryPanel() {
+export function RoleLibraryPanel({ readonly = false }: { readonly?: boolean }) {
   const [roles, setRoles] = useState<RoleLibraryEntry[]>([])
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<'order' | 'name'>('order')
-  const [editor, setEditor] = useState<{ roleId?: string } | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
 
   useEffect(() => {
@@ -35,16 +37,29 @@ export function RoleLibraryPanel() {
       .catch(() => setRoles([]))
   }, [search, sort, reloadTick])
 
+  // MVP-5B UI 重构：角色保存后刷新（BoardOverlays 派发）
+  useEffect(() => {
+    const onRolesChanged = (): void => setReloadTick((t) => t + 1)
+    window.addEventListener('weave:roles-changed', onRolesChanged)
+    return () => window.removeEventListener('weave:roles-changed', onRolesChanged)
+  }, [])
+
+  const openRoleEditor = (roleId?: string): void => {
+    window.dispatchEvent(new CustomEvent('weave:open-role-editor', { detail: roleId ? { roleId } : {} }))
+  }
+
   return (
     <div className="role-library-panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h3 style={{ margin: 0 }}>角色库（{roles.length}）</h3>
-        <button
-          onClick={() => setEditor({})}
-          style={{ fontSize: 12, padding: '2px 8px', cursor: 'pointer', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 4 }}
-        >
-          + 新建
-        </button>
+        {!readonly && (
+          <button
+            onClick={() => openRoleEditor()}
+            style={{ fontSize: 12, padding: '2px 8px', cursor: 'pointer', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 4 }}
+          >
+            + 新建
+          </button>
+        )}
       </div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
         <input
@@ -64,36 +79,31 @@ export function RoleLibraryPanel() {
           <div
             key={r.id}
             title={r.description ?? ''}
-            draggable
+            draggable={!readonly}
             onDragStart={(e) => {
               const payload: DraggableRole = { id: r.id, name: r.name, suggests_next: r.suggests_next }
               e.dataTransfer.setData('application/weave-role', JSON.stringify(payload))
               e.dataTransfer.effectAllowed = 'copy'
             }}
-            style={{ border: '1px solid #eee', borderRadius: 6, padding: '4px 8px', fontSize: 12, cursor: 'grab' }}
+            style={{ border: '1px solid #eee', borderRadius: 6, padding: '4px 8px', fontSize: 12, cursor: readonly ? 'default' : 'grab' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span><strong>{r.name}</strong> <span style={{ color: '#888' }}>{r.id}</span></span>
-              <button
-                onClick={(e) => { e.stopPropagation(); setEditor({ roleId: r.id }) }}
-                title="编辑角色"
-                style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13 }}
-              >
-                ⚙
-              </button>
+              {!readonly && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); openRoleEditor(r.id) }}
+                  title="编辑角色"
+                  style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13 }}
+                >
+                  ⚙
+                </button>
+              )}
             </div>
             {r.description && <div style={{ color: '#666' }}>{r.description}</div>}
             {r.tags.length > 0 && <div style={{ color: '#999' }}>{r.tags.join(' · ')}</div>}
           </div>
         ))}
       </div>
-      {editor && (
-        <RoleEditor
-          roleId={editor.roleId}
-          onClose={() => setEditor(null)}
-          onSaved={() => setReloadTick((t) => t + 1)}
-        />
-      )}
     </div>
   )
 }

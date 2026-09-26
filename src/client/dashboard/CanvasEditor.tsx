@@ -1,11 +1,13 @@
 /**
- * 引导式画布编辑器（MVP-5 Phase C 简化实现）。
+ * 引导式画布编辑器（MVP-5 Phase C 简化实现；MVP-5B UI 重构改造）。
  *
  * 原生 div+SVG 自绘（零新依赖，MVP-5 可演进 React Flow）：
  * - 从角色库拖入角色 → 生成节点；节点可拖动
  * - 点击节点 → 点击另一节点 → 连 seq 边
  * - 角色带 suggests_next → 弹出推荐下一步面板
- * - 选中节点 → 配置抽屉（模型覆盖/输入门禁/审批/输出约束）
+ * - 双击节点 / ⚙ 配置 → 派发 weave:open-node-editor（BoardOverlays 渲染 NodeEditorModal）
+ * - 监听 weave:node-saved / weave:node-deleted 回写节点
+ * - readonly：运行中锁定编辑（禁拖入/拖动/删除/双击）
  * - 导出 ClientGraphSpec（供保存 / 启动任务）
  */
 import { useEffect, useMemo, useState } from 'react'
@@ -31,94 +33,11 @@ interface RoleDrop {
 interface Props {
   initialGraph?: ClientGraphSpec | null
   onGraphChange?: (spec: ClientGraphSpec) => void
+  /** MVP-5B UI 重构：运行中只读（禁编辑）。 */
+  readonly?: boolean
 }
 
-/** MVP-5B B6：节点编辑器弹窗（planB §6.4；双击节点弹出）。 */
-function NodeEditor({
-  node,
-  roles,
-  onSave,
-  onDelete,
-  onClose,
-}: {
-  node: EditorNode
-  roles: Array<{ id: string; name: string }>
-  onSave: (n: EditorNode) => void
-  onDelete: () => void
-  onClose: () => void
-}) {
-  const [draft, setDraft] = useState<EditorNode>({ ...node })
-
-  const inputStyle: React.CSSProperties = { width: '100%', fontSize: 13, padding: '4px 6px', boxSizing: 'border-box' }
-  const labelStyle: React.CSSProperties = { fontSize: 12, color: '#64748b' }
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.4)', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ background: '#fff', borderRadius: 12, width: 520, maxWidth: '92vw', padding: 16, boxShadow: '0 8px 32px rgba(0,0,0,.2)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <h3 style={{ margin: 0, fontSize: 15 }}>节点配置 · {node.roleName}</h3>
-          <button onClick={onClose} style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer' }}>×</button>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8 }}>
-          <div style={{ flex: 1 }}>
-            <div style={labelStyle}>节点 ID</div>
-            <input style={inputStyle} value={draft.id} onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={labelStyle}>角色（roleRef）</div>
-            <select style={inputStyle} value={draft.roleRef} onChange={(e) => {
-              const r = roles.find((x) => x.id === e.target.value)
-              setDraft({ ...draft, roleRef: e.target.value, roleName: r?.name ?? e.target.value })
-            }}>
-              {roles.map((r) => <option key={r.id} value={r.id}>{r.name} · {r.id}</option>)}
-            </select>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <div style={{ flex: 1 }}>
-            <div style={labelStyle}>产物文件名</div>
-            <input style={inputStyle} value={draft.artifactName ?? ''} placeholder={`${draft.id}.md`}
-              onChange={(e) => setDraft({ ...draft, artifactName: e.target.value })} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={labelStyle}>模型覆盖</div>
-            <input style={inputStyle} value={draft.modelOverride ?? ''} placeholder="默认"
-              onChange={(e) => setDraft({ ...draft, modelOverride: e.target.value })} />
-          </div>
-        </div>
-
-        <div style={{ marginTop: 8 }}>
-          <div style={labelStyle}>输入门禁（上游节点 ID，逗号分隔）</div>
-          <input style={inputStyle} value={draft.inputGate ?? ''} placeholder="node-a, node-b"
-            onChange={(e) => setDraft({ ...draft, inputGate: e.target.value })} />
-        </div>
-
-        <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 13 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <input type="checkbox" checked={draft.onlyMarkdown ?? false}
-              onChange={(e) => setDraft({ ...draft, onlyMarkdown: e.target.checked })} /> 仅 .md
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <input type="checkbox" checked={draft.approval ?? false}
-              onChange={(e) => setDraft({ ...draft, approval: e.target.checked })} /> 需用户审批
-          </label>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14 }}>
-          <button onClick={onDelete} style={{ padding: '6px 12px', cursor: 'pointer', color: '#ef4444', border: '1px solid #ef4444', background: '#fff', borderRadius: 6 }}>删除节点</button>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={onClose} style={{ padding: '6px 12px', cursor: 'pointer' }}>取消</button>
-            <button onClick={() => onSave(draft)} style={{ padding: '6px 16px', cursor: 'pointer', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6 }}>保存</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
+export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: Props) {
   const [nodes, setNodes] = useState<EditorNode[]>(() =>
     (initialGraph?.nodes ?? []).map((n, i) => ({
       id: n.id,
@@ -132,7 +51,6 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
     (initialGraph?.edges ?? []).filter((e) => e.type === 'seq').map((e) => ({ from: e.from, to: e.to })),
   )
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [editingId, setEditingId] = useState<string | null>(null) // MVP-5B B6：双击编辑
   const [roles, setRoles] = useState<Array<{ id: string; name: string }>>([])
   const [suggestion, setSuggestion] = useState<{ sourceId: string; items: Array<{ roleRef: string; label?: string; reason?: string }> } | null>(null)
   const [counter, setCounter] = useState(initialGraph?.nodes.length ?? 0)
@@ -145,13 +63,45 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
       .catch(() => setRoles([]))
   }, [])
 
+  // MVP-5B UI 重构：节点编辑浮层回写（BoardOverlays 派发）
+  useEffect(() => {
+    const onNodeSaved = (e: Event): void => {
+      const d = (e as CustomEvent<{ nodeId: string; node: EditorNode }>).detail
+      if (!d?.nodeId || !d.node) return
+      const ns = nodes.map((n) => (n.id === d.nodeId ? d.node : n))
+      setNodes(ns)
+      emit(ns, edges)
+    }
+    const onNodeDeleted = (e: Event): void => {
+      const d = (e as CustomEvent<{ nodeId: string }>).detail
+      if (!d?.nodeId) return
+      removeNode(d.nodeId)
+    }
+    window.addEventListener('weave:node-saved', onNodeSaved)
+    window.addEventListener('weave:node-deleted', onNodeDeleted)
+    return () => {
+      window.removeEventListener('weave:node-saved', onNodeSaved)
+      window.removeEventListener('weave:node-deleted', onNodeDeleted)
+    { /* eslint-disable-next-line react-hooks/exhaustive-deps */ }
+    }
+  }, [nodes, edges])
+
   const positioned = useMemo(() => layoutNodes(nodes, edges), [nodes, edges])
 
   const emit = (ns: EditorNode[], es: Array<{ from: string; to: string }>): void => {
     onGraphChange?.(buildGraphSpec(ns, es))
   }
 
+  const openNodeEditor = (id: string): void => {
+    const target = positioned.find((n) => n.id === id)
+    if (!target) return
+    window.dispatchEvent(new CustomEvent('weave:open-node-editor', {
+      detail: { nodeId: id, node: target, roles },
+    }))
+  }
+
   const addRoleByName = async (roleRef: string, sourceId: string): Promise<void> => {
+    if (readonly) return
     const res = await fetch('/api/weave/roles')
     const roles = (await res.json()) as Array<{ id: string; name: string; suggests_next?: RoleDrop['suggests_next'] }>
     const role = roles.find((r) => r.id === roleRef)
@@ -168,6 +118,7 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
 
   const selectNode = (id: string): void => {
     if (selectedId && selectedId !== id) {
+      if (readonly) { setSelectedId(id); return }
       const es = [...edges, { from: selectedId, to: id }]
       setEdges(es)
       emit(nodes, es)
@@ -178,6 +129,7 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
   }
 
   const removeNode = (id: string): void => {
+    if (readonly) return
     const ns = nodes.filter((n) => n.id !== id)
     const es = edges.filter((e) => e.from !== id && e.to !== id)
     setNodes(ns)
@@ -189,6 +141,7 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
 
   const onDrop = (e: React.DragEvent): void => {
     e.preventDefault()
+    if (readonly) return
     const rect = e.currentTarget.getBoundingClientRect()
     const x = e.clientX - rect.left - NODE_W / 2
     const y = e.clientY - rect.top - NODE_H / 2
@@ -244,15 +197,16 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
         {positioned.map((n) => (
           <div
             key={n.id}
-            draggable
+            draggable={!readonly}
             onDragStart={(e) => {
               e.dataTransfer.setData('application/weave-node', n.id)
               e.dataTransfer.effectAllowed = 'move'
             }}
             onClick={() => selectNode(n.id)}
             onDoubleClick={() => {
-              // MVP-5B B6：双击弹出节点编辑器（验收 10.3#7）
-              setEditingId(n.id)
+              // MVP-5B UI 重构：双击派发事件（BoardOverlays 渲染浮层）
+              if (readonly) return
+              openNodeEditor(n.id)
             }}
             style={{
               position: 'absolute',
@@ -276,22 +230,24 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
             <span style={{ color: '#64748b' }}>{n.id}</span>
             {n.modelOverride && <span style={{ color: '#8b5cf6' }}>⚙ {n.modelOverride}</span>}
             {n.approval && <span style={{ color: '#f59e0b' }}>✓ 需审批</span>}
-            <button
-              style={{ position: 'absolute', top: 2, right: 2, border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer' }}
-              onClick={(e) => { e.stopPropagation(); removeNode(n.id) }}
-            >
-              ×
-            </button>
+            {!readonly && (
+              <button
+                style={{ position: 'absolute', top: 2, right: 2, border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer' }}
+                onClick={(e) => { e.stopPropagation(); removeNode(n.id) }}
+              >
+                ×
+              </button>
+            )}
           </div>
         ))}
-        {nodes.length === 0 && (
+        {nodes.length === 0 && !readonly && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: 13 }}>
             从左侧角色库拖入角色，开始编排
           </div>
         )}
       </div>
 
-      {suggestion && (
+      {suggestion && !readonly && (
         <div style={{ position: 'absolute', right: 8, top: 8, width: 220, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: 8, boxShadow: '0 4px 12px rgba(0,0,0,.12)' }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>推荐下一步（可选）</div>
           {suggestion.items.length === 0 && <div style={{ fontSize: 12, color: '#94a3b8' }}>此角色未配置推荐</div>}
@@ -312,7 +268,7 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
         </div>
       )}
 
-      {selected && (
+      {selected && !readonly && (
         <div style={{ position: 'absolute', left: 8, bottom: 8, right: 8, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: 8, fontSize: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <strong>{selected.roleRef}</strong>
           <input
@@ -343,32 +299,9 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
             />
             仅 .md
           </label>
-          <button onClick={() => setEditingId(selected.id)} style={{ marginLeft: 'auto', fontSize: 12, cursor: 'pointer', padding: '2px 8px' }}>⚙ 配置</button>
+          <button onClick={() => openNodeEditor(selected.id)} style={{ marginLeft: 'auto', fontSize: 12, cursor: 'pointer', padding: '2px 8px' }}>⚙ 配置</button>
         </div>
       )}
-
-      {/* MVP-5B B6：节点编辑器（双击节点 / 选中后 ⚙ 配置） */}
-      {editingId && (() => {
-        const target = positioned.find((n) => n.id === editingId)
-        if (!target) return null
-        return (
-          <NodeEditor
-            node={target}
-            roles={roles}
-            onClose={() => setEditingId(null)}
-            onDelete={() => {
-              removeNode(target.id)
-              setEditingId(null)
-            }}
-            onSave={(n) => {
-              const ns = nodes.map((x) => (x.id === target.id ? n : x))
-              setNodes(ns)
-              emit(ns, edges)
-              setEditingId(null)
-            }}
-          />
-        )
-      })()}
     </div>
   )
 }

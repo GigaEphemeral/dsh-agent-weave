@@ -1,172 +1,112 @@
+/**
+ * dsh-agent-weave Client 入口（MVP-5B UI 重构）。
+ *
+ * 挂载 WeaveBoard（4-Tab 工作台）到 conversation.view，BoardOverlays 到 shell.overlay。
+ * 全局 SSE 订阅 → board-state（任务提议 → 编排；图启动 → 运行）。
+ */
 import type { Context } from '@deepseek-ai/cordis'
-import { WeaveDashboardButton } from './dashboard/WeaveDashboardButton.js'
-import { WeaveDashboardView } from './dashboard/WeaveDashboardView.js'
-import { WeaveEditPanel } from './dashboard/WeaveEditPanel.js'
-import { UserQuestionModal } from './dashboard/UserQuestionModal.js'
-
-function diag(msg: string, data?: unknown): void {
-    const line = `[weave-client] ${msg}${data !== undefined ? ' ' + JSON.stringify(data).slice(0, 200) : ''}`
-    console.log(line)
-    if (typeof document !== 'undefined') {
-        document.title = `[weave] ${msg}`.slice(0, 90)
-    }
-}
-
-diag('module loaded', {
-    url: typeof window !== 'undefined' ? window.location.href.slice(0, 60) : 'no-window',
-})
+import { WeaveBoard } from './board/WeaveBoard.js'
+import { BoardOverlays } from './board/BoardOverlays.js'
+import { setCurrentTask, setActiveTab, clearTask } from './state/board-state.js'
 
 interface SlotsLike {
-    inject(name: string, register: () => (() => void) | undefined): void
-    register(
-        options: {
-            name: string
-            id?: string
-            order?: number
-            label?: string | (() => string)
-        },
-        component: unknown,
-    ): () => void
+  inject(name: string, register: () => (() => void) | undefined): void
+  register(opts: { name: string; id?: string; order?: number; label?: string | (() => string) }, comp: unknown): () => void
 }
 
 type ClientContext = Context & { slots?: SlotsLike }
 
-const SLOT_D1 = 'conversation.session.header.actions'
 const SLOT_D3 = 'conversation.view'
-// MVP-5B B6（决策 #8）：常驻挂载用 shell.overlay（真实 Slot 树；设计文档的 app.root 为占位）
 const SLOT_OVERLAY = 'shell.overlay'
 
 export const name = 'dsh-agent-weave-client'
 export const inject = ['slots']
 
 export function apply(ctx: Context): void {
-    diag('apply invoked')
+  const slots = (ctx as ClientContext).slots
+  if (!slots) return
 
-    const slots = (ctx as ClientContext).slots
-    if (!slots) {
-        diag('no slots')
-        return
-    }
+  // D3：看板主体（4-Tab 工作台）
+  slots.inject(SLOT_D3, () => slots.register(
+    { name: SLOT_D3, id: 'weave-board', label: () => 'Weave 看板', order: 10 },
+    WeaveBoard,
+  ))
 
-    diag('slots API', {
-        injectType: typeof slots.inject,
-        registerType: typeof slots.register,
-    })
+  // overlay：浮层（用户确认 / 角色编辑 / 节点编辑）
+  slots.inject(SLOT_OVERLAY, () => slots.register(
+    { name: SLOT_OVERLAY, id: 'weave-overlays', order: 100 },
+    BoardOverlays,
+  ))
 
-    // D1：页头按钮
+  // 全局 SSE：任务提议 → 打开看板 + 切编排；图启动 → 运行
+  const es = new EventSource('/api/weave/stream')
+  es.onmessage = (msg) => {
     try {
-        diag('D1 register start', { slot: SLOT_D1 })
-        slots.inject(SLOT_D1, () => {
-            diag('D1 inject callback fired')
-            return slots.register(
-                {
-                    name: SLOT_D1,
-                    id: 'weave-dashboard-toggle',
-                    label: () => 'Weave 看板',
-                    order: 0,
-                },
-                WeaveDashboardButton,
-            )
-        })
-        diag('D1 inject call ok')
-    } catch (error) {
-        diag('D1 FAILED', { error: error instanceof Error ? error.message : String(error) })
-    }
+      const evt = JSON.parse(msg.data) as {
+        event_type?: string
+        trace_id?: string
+        data?: { taskId?: string; graphId?: string; pauseReason?: string; error?: string; status?: string }
+      }
 
-    // MVP-5 Phase I：全局右侧滑出编辑面板 + 用户确认弹窗（挂 header 槽位，聊天页也可见）
-    // MVP-5B B6（决策 #8）：改为常驻挂载到 shell.overlay（不依赖 dashboard 开关）
-    try {
-        diag('overlay register start', { slot: SLOT_OVERLAY })
-        slots.inject(SLOT_OVERLAY, () => slots.register(
-            { name: SLOT_OVERLAY, id: 'weave-edit-panel-host', order: 1 },
-            WeaveEditPanel,
-        ))
-        slots.inject(SLOT_OVERLAY, () => slots.register(
-            { name: SLOT_OVERLAY, id: 'weave-user-question-host', order: 2 },
-            UserQuestionModal,
-        ))
-        diag('overlay register ok')
-    } catch (error) {
-        diag('overlay FAILED', { error: error instanceof Error ? error.message : String(error) })
-    }
-
-    // D3：主区切换
-    try {
-        diag('D3 register start', { slot: SLOT_D3 })
-        slots.inject(SLOT_D3, () => {
-            diag('D3 inject callback fired')
-            return slots.register(
-                {
-                    name: SLOT_D3,
-                    id: 'weave-dashboard',
-                    label: () => 'Weave 看板',
-                    order: 10,
-                },
-                WeaveDashboardView,
-            )
-        })
-        diag('D3 inject call ok')
-    } catch (error) {
-        diag('D3 FAILED', { error: error instanceof Error ? error.message : String(error) })
-    }
-
-    // ★ 问题一步骤3：订阅全局 SSE，捕获新图启动（graph-start）→ 广播自定义事件
-    try {
-        diag('global SSE subscribe start')
-        const es = new EventSource('/api/weave/stream')
-        es.onmessage = (msg) => {
+      if (evt.event_type === 'task-proposed' && evt.data?.taskId) {
+        // 拉取任务详情
+        fetch(`/api/weave/tasks/${evt.data.taskId}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((task) => {
+            if (!task) return
+            setCurrentTask({
+              taskId: task.taskId,
+              phase: 'editing',
+              userInput: task.userInput,
+              template: task.template,
+            })
+            setActiveTab('canvas')
+            // 尝试激活看板（best-effort）
             try {
-                const evt = JSON.parse(msg.data) as { event_type?: string; trace_id?: string; data?: { taskId?: string; pauseReason?: string; error?: string; reason?: string } }
-                if (evt.event_type === 'task-proposed' && evt.data?.taskId) {
-                    diag('task-proposed captured', { taskId: evt.data.taskId })
-                    window.dispatchEvent(new CustomEvent('weave:task-proposed', { detail: { taskId: evt.data.taskId } }))
-                    // PR-5.6 best-effort：宿主 Slots 支持 activate 时自动打开看板
-                    try {
-                        const s = slots as SlotsLike & { activate?: (slot: string, id: string, opts?: unknown) => void }
-                        if (s?.activate) s.activate('conversation.view', 'weave-dashboard', { taskId: evt.data.taskId })
-                    } catch {
-                        // 降级：看板内 WeaveEditPanel 抽屉
-                    }
-                    return
-                }
-                if (evt.event_type === 'graph-paused' && evt.data?.pauseReason) {
-                    const reason = evt.data.pauseReason
-                    if (reason === 'awaiting-user' || reason === 'approval-pending' || reason === 'environment-gate') {
-                        const text = (evt.data as { error?: string; reason?: string }).error
-                            ?? (evt.data as { reason?: string }).reason
-                            ?? `图已暂停（${reason}），需要你的确认`
-                        window.dispatchEvent(new CustomEvent('weave:user-question', {
-                            detail: { graphId: evt.trace_id, question: { text } },
-                        }))
-                    }
-                    return
-                }
-                if (evt.event_type !== 'graph-start') return
-                const graphId = evt.trace_id
-                if (!graphId) return
-                diag('graph-start captured', { graphId })
-                window.dispatchEvent(new CustomEvent('weave:graph-started', { detail: { graphId } }))
-            } catch {
-                // 忽略解析失败
-            }
-        }
-        es.onerror = () => {
-            // EventSource 自动重连
-        }
-        ctx.effect(() => () => es.close())
-        diag('global SSE subscribe ok')
-    } catch (error) {
-        diag('global SSE FAILED', { error: error instanceof Error ? error.message : String(error) })
-    }
+              const s = slots as SlotsLike & { activate?: (slot: string, id: string, opts?: unknown) => void }
+              s.activate?.('conversation.view', 'weave-board', { taskId: task.taskId })
+            } catch { /* 降级：用户手动切 Tab */ }
+          })
+          .catch(() => {})
+        return
+      }
 
-    // 问题三 D3：空闲告警浏览器 Notification 权限（可选，默认不打扰）
-    try {
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
-            void Notification.requestPermission()
-        }
-    } catch {
-        // 权限请求失败忽略
-    }
+      if (evt.event_type === 'graph-start' && evt.trace_id) {
+        setCurrentTask({ graphId: evt.trace_id, phase: 'running' })
+        setActiveTab('runtime')
+        return
+      }
 
-    diag('apply done')
+      if (evt.event_type === 'graph-paused') {
+        const reason = evt.data?.pauseReason ?? ''
+        if (reason === 'awaiting-user' || reason === 'approval-pending' || reason === 'environment-gate') {
+          window.dispatchEvent(new CustomEvent('weave:user-question', {
+            detail: {
+              graphId: evt.trace_id,
+              question: { text: evt.data?.error ?? `图已暂停（${reason}），需要你的确认` },
+            },
+          }))
+        }
+        setCurrentTask({ phase: 'awaiting' })
+        return
+      }
+
+      if (evt.event_type === 'graph-end' && evt.data?.status === 'completed') {
+        setCurrentTask({ phase: 'completed' })
+        return
+      }
+    } catch { /* 忽略坏帧 */ }
+  }
+  es.onerror = () => { /* auto-reconnect */ }
+  ctx.effect(() => () => es.close())
+
+  // 响应"查看产物"事件
+  const onViewArtifacts = (): void => setActiveTab('artifacts')
+  window.addEventListener('weave:view-artifacts', onViewArtifacts)
+  ctx.effect(() => () => window.removeEventListener('weave:view-artifacts', onViewArtifacts))
+
+  // 响应"新建任务"事件（清状态）
+  const onNewTask = (): void => clearTask()
+  window.addEventListener('weave:new-task', onNewTask)
+  ctx.effect(() => () => window.removeEventListener('weave:new-task', onNewTask))
 }
