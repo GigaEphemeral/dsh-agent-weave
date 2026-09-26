@@ -64,6 +64,7 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
   }, [])
 
   // MVP-5B UI 重构：节点编辑浮层回写（BoardOverlays 派发）
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const onNodeSaved = (e: Event): void => {
       const d = (e as CustomEvent<{ nodeId: string; node: EditorNode }>).detail
@@ -82,7 +83,6 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
     return () => {
       window.removeEventListener('weave:node-saved', onNodeSaved)
       window.removeEventListener('weave:node-deleted', onNodeDeleted)
-    { /* eslint-disable-next-line react-hooks/exhaustive-deps */ }
     }
   }, [nodes, edges])
 
@@ -107,7 +107,12 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
     const role = roles.find((r) => r.id === roleRef)
     if (!role) return
     const id = `${role.id}-${counter + 1}`
-    const ns = [...nodes, { id, roleRef: role.id, roleName: role.name, x: 0, y: 0 }]
+    const idx = nodes.length
+    const ns = [...nodes, {
+      id, roleRef: role.id, roleName: role.name,
+      x: (idx % 3) * (NODE_W + COL_X),        // ★ 修复：网格铺开
+      y: Math.floor(idx / 3) * (NODE_H + ROW_Y),
+    }]
     const es = [...edges, { from: sourceId, to: id }]
     setNodes(ns)
     setEdges(es)
@@ -165,7 +170,7 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
   const selected = positioned.find((n) => n.id === selectedId) ?? null
 
   return (
-    <div style={{ position: 'relative', width: '100%', minHeight: 260, border: '1px dashed #ccc', borderRadius: 8, background: '#fafafa', overflow: 'hidden' }}>
+    <div style={{ position: 'relative', width: '100%', minHeight: 260, height: '100%', border: '1px dashed #ccc', borderRadius: 8, background: '#fafafa', overflow: 'hidden' }}>
       {/* MVP-5 Phase D：边流动画 */}
       <style>{'@keyframes weave-edge-flow { to { stroke-dashoffset: -12; } }'}</style>
       <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
@@ -269,37 +274,26 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false }: 
       )}
 
       {selected && !readonly && (
-        <div style={{ position: 'absolute', left: 8, bottom: 8, right: 8, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: 8, fontSize: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <strong>{selected.roleRef}</strong>
-          <input
-            placeholder="模型覆盖（可选）"
-            value={selected.modelOverride ?? ''}
-            onChange={(e) => setNodes(positioned.map((n) => (n.id === selected.id ? { ...n, modelOverride: e.target.value } : n)))}
-            style={{ fontSize: 12, width: 140 }}
-          />
-          <input
-            placeholder="输入门禁 requires（逗号分隔）"
-            value={selected.inputGate ?? ''}
-            onChange={(e) => setNodes(positioned.map((n) => (n.id === selected.id ? { ...n, inputGate: e.target.value } : n)))}
-            style={{ fontSize: 12, width: 180 }}
-          />
-          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <input
-              type="checkbox"
-              checked={selected.approval ?? false}
-              onChange={(e) => setNodes(positioned.map((n) => (n.id === selected.id ? { ...n, approval: e.target.checked } : n)))}
-            />
-            需用户审批
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <input
-              type="checkbox"
-              checked={selected.onlyMarkdown ?? false}
-              onChange={(e) => setNodes(positioned.map((n) => (n.id === selected.id ? { ...n, onlyMarkdown: e.target.checked } : n)))}
-            />
-            仅 .md
-          </label>
-          <button onClick={() => openNodeEditor(selected.id)} style={{ marginLeft: 'auto', fontSize: 12, cursor: 'pointer', padding: '2px 8px' }}>⚙ 配置</button>
+        <div style={{
+          position: 'absolute', left: 8, right: 8, bottom: 8,
+          background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8,
+          padding: '6px 10px', fontSize: 12,
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <strong>{selected.roleName}</strong>
+          <span style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{selected.id}</span>
+          <button
+            onClick={() => openNodeEditor(selected.id)}
+            style={{ marginLeft: 'auto', padding: '4px 12px', cursor: 'pointer' }}
+          >
+            ⚙ 编辑配置
+          </button>
+          <button
+            onClick={() => setSelectedId(null)}
+            style={{ padding: '4px 8px', cursor: 'pointer' }}
+          >
+            ×
+          </button>
         </div>
       )}
     </div>

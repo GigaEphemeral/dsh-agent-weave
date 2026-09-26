@@ -25,8 +25,11 @@ export interface EditorNode {
   artifactName?: string
 }
 
-/** 按 seq 边分层布局（同层节点竖直排布）。 */
+/** 按 seq 边分层布局（同层节点竖直排布；无连线时保持原有网格 x/y）。 */
 export function layoutNodes(nodes: EditorNode[], edges: Array<{ from: string; to: string }>): EditorNode[] {
+  // ★ 修复 2：无连线 → 保持节点原有 x/y（不清算 level，避免全竖排）
+  if (edges.length === 0) return nodes
+
   const out = new Map<string, Array<{ from: string; to: string }>>()
   for (const e of edges) {
     const list = out.get(e.from) ?? []

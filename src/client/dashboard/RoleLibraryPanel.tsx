@@ -49,7 +49,11 @@ export function RoleLibraryPanel({ readonly = false }: { readonly?: boolean }) {
   }
 
   return (
-    <div className="role-library-panel">
+    <div className="role-library-panel" style={{
+      height: '100%',
+      display: 'flex', flexDirection: 'column',
+      gap: 8,
+    }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h3 style={{ margin: 0 }}>角色库（{roles.length}）</h3>
         {!readonly && (
@@ -61,7 +65,7 @@ export function RoleLibraryPanel({ readonly = false }: { readonly?: boolean }) {
           </button>
         )}
       </div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+      <div style={{ display: 'flex', gap: 6 }}>
         <input
           placeholder="搜索角色..."
           value={search}
@@ -73,7 +77,8 @@ export function RoleLibraryPanel({ readonly = false }: { readonly?: boolean }) {
           <option value="name">按名称</option>
         </select>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflowY: 'auto' }}>
+      {/* 修复 6：flex:1 + minHeight:0 撑满父容器，替代写死 maxHeight:320 */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {roles.length === 0 && <div style={{ color: '#888', fontSize: 12 }}>（暂无角色）</div>}
         {roles.map((r) => (
           <div

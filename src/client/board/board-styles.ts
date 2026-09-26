@@ -159,11 +159,14 @@ export const BOARD_CSS = `
 .canvas-pane { flex: 1; display: flex; min-height: 0; }
 
 .role-sidebar {
-  width: 240px; flex: 0 0 240px;
+  width: 220px; flex: 0 0 220px;
   border-right: 1px solid var(--w-border);
   background: var(--w-bg-soft);
   overflow-y: auto;
   padding: 12px;
+  display: flex;            /* 修复 7：让内部组件撑满 */
+  flex-direction: column;
+  min-height: 0;
 }
 .role-sidebar::-webkit-scrollbar { width: 6px; }
 .role-sidebar::-webkit-scrollbar-thumb { background: var(--w-border); border-radius: 3px; }
@@ -479,4 +482,18 @@ export const BOARD_CSS = `
   padding: 6px 0; font-size: 12.5px; cursor: pointer;
 }
 .weave-modal .checkbox input { accent-color: var(--w-brand); }
+
+/* 修复 1：checkbox 重置样式，不继承 .field input 的 100% 宽（否则竖排撑满整行） */
+.weave-modal .field input[type="checkbox"],
+.weave-modal .checkbox input[type="checkbox"] {
+  width: auto !important;
+  padding: 0 !important;
+  border: none !important;
+  background: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  accent-color: var(--w-brand);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
 `
