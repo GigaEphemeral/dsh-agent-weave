@@ -1,7 +1,8 @@
 /**
- * 角色库面板（MVP-5 Phase A：描述/排序/搜索）。
+ * 角色库面板（MVP-5 Phase A：描述/排序/搜索；MVP-5B B6：+ 新建 + ⚙ 编辑）。
  */
 import { useEffect, useState } from 'react'
+import { RoleEditor } from './RoleEditor'
 
 export interface RoleLibraryEntry {
   id: string
@@ -22,6 +23,8 @@ export function RoleLibraryPanel() {
   const [roles, setRoles] = useState<RoleLibraryEntry[]>([])
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<'order' | 'name'>('order')
+  const [editor, setEditor] = useState<{ roleId?: string } | null>(null)
+  const [reloadTick, setReloadTick] = useState(0)
 
   useEffect(() => {
     const params = new URLSearchParams({ sort })
@@ -30,11 +33,19 @@ export function RoleLibraryPanel() {
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setRoles(Array.isArray(d) ? d : []))
       .catch(() => setRoles([]))
-  }, [search, sort])
+  }, [search, sort, reloadTick])
 
   return (
     <div className="role-library-panel">
-      <h3>角色库（{roles.length}）</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3 style={{ margin: 0 }}>角色库（{roles.length}）</h3>
+        <button
+          onClick={() => setEditor({})}
+          style={{ fontSize: 12, padding: '2px 8px', cursor: 'pointer', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 4 }}
+        >
+          + 新建
+        </button>
+      </div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
         <input
           placeholder="搜索角色..."
@@ -61,12 +72,28 @@ export function RoleLibraryPanel() {
             }}
             style={{ border: '1px solid #eee', borderRadius: 6, padding: '4px 8px', fontSize: 12, cursor: 'grab' }}
           >
-            <div><strong>{r.name}</strong> <span style={{ color: '#888' }}>{r.id}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span><strong>{r.name}</strong> <span style={{ color: '#888' }}>{r.id}</span></span>
+              <button
+                onClick={(e) => { e.stopPropagation(); setEditor({ roleId: r.id }) }}
+                title="编辑角色"
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13 }}
+              >
+                ⚙
+              </button>
+            </div>
             {r.description && <div style={{ color: '#666' }}>{r.description}</div>}
             {r.tags.length > 0 && <div style={{ color: '#999' }}>{r.tags.join(' · ')}</div>}
           </div>
         ))}
       </div>
+      {editor && (
+        <RoleEditor
+          roleId={editor.roleId}
+          onClose={() => setEditor(null)}
+          onSaved={() => setReloadTick((t) => t + 1)}
+        />
+      )}
     </div>
   )
 }

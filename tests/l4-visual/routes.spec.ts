@@ -175,4 +175,59 @@ describe('weave REST 路由', () => {
     expect(listRes.state.status).toBe(200)
     expect((listRes.state.body as Array<{ id: string }>)[0]?.id).toBe('g1')
   })
+
+  // ─── MVP-5B B6：角色编辑器动态候选值 + 交接单（planB §5.x） ───
+
+  it('GET /providers /capabilities /tools 返回动态候选值（不硬编码）', async () => {
+    const handle = setupHandler()
+    const p = makeRes()
+    await handle('/providers', makeReq('GET', '/api/weave/providers'), p.res)
+    expect(p.state.status).toBe(200)
+    expect((p.state.body as { overallSource: string }).overallSource).toBe('yaml-scan') // roles 目录有 R1
+
+    const c = makeRes()
+    await handle('/capabilities', makeReq('GET', '/api/weave/capabilities'), c.res)
+    expect((c.state.body as { capabilities: string[] }).capabilities).toHaveLength(8)
+
+    const t = makeRes()
+    await handle('/tools', makeReq('GET', '/api/weave/tools'), t.res)
+    expect((t.state.body as { tools: string[] }).tools).toBeInstanceOf(Array)
+  })
+
+  it('POST /roles 保存角色定义（§5.3）', async () => {
+    const handle = setupHandler()
+    const req = makeReq('POST', '/api/weave/roles', { id: 'R9-reviewer', name: '评审者', provider: 'acme', model: 'm1', tools: ['read'] })
+    const res = makeRes()
+    const pending = handle('/roles', req, res.res)
+    req._emit('data', Buffer.from(JSON.stringify({ id: 'R9-reviewer', name: '评审者', provider: 'acme', model: 'm1', tools: ['read'] })))
+    req._emit('end')
+    await pending
+    expect(res.state.status).toBe(200)
+    expect((res.state.body as { ok: boolean; id: string }).ok).toBe(true)
+    expect((res.state.body as { id: string }).id).toBe('R9-reviewer')
+    // 落盘后角色库可搜索到（query 放 URL，rest 保持 /roles）
+    const listRes = makeRes()
+    await handle('/roles', makeReq('GET', '/api/weave/roles?search=R9-reviewer'), listRes.res)
+    expect((listRes.state.body as Array<{ id: string }>).some((r) => r.id === 'R9-reviewer')).toBe(true)
+  })
+
+  it('POST /roles 非法（缺 id）→ ok:false', async () => {
+    const handle = setupHandler()
+    const req = makeReq('POST', '/api/weave/roles', { name: '无名' })
+    const res = makeRes()
+    const pending = handle('/roles', req, res.res)
+    req._emit('data', Buffer.from(JSON.stringify({ name: '无名' })))
+    req._emit('end')
+    await pending
+    expect((res.state.body as { ok: boolean }).ok).toBe(false)
+  })
+
+  it('GET /graph/:id/handoff 返回 latest/byNode（空图时 latest=null）', async () => {
+    const handle = setupHandler()
+    const res = makeRes()
+    await handle('/graph/g-unknown/handoff', makeReq('GET', '/api/weave/graph/g-unknown/handoff'), res.res)
+    expect(res.state.status).toBe(200)
+    expect((res.state.body as { latest: unknown; byNode: Record<string, unknown> }).latest).toBeNull()
+    expect((res.state.body as { byNode: Record<string, unknown> }).byNode).toEqual({})
+  })
 })

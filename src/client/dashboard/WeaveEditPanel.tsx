@@ -1,19 +1,47 @@
 /**
- * 右侧滑出编辑面板（MVP-5 Phase I，Client 侧）。
+ * 右侧滑出编辑面板（MVP-5 Phase I，Client 侧；MVP-5B B6：决策 #7/#9）。
  *
  * 监听 window 'weave:task-proposed'（由看板全局 SSE 派发/或主 agent 工具返回后触发），
  * 在右侧滑出编辑面板：画布编辑 → 保存/开始工作。
- * 依赖宿主 Slots 的“自动激活”探测（PR-5.6）前，先作为看板内抽屉可用。
+ *
+ * MVP-5B B6 变更：
+ * - 决策 #7：面板打开时给 body 加 weave-panel-open 类，主区被挤压（margin-right），主 agent 仍可见
+ * - 决策 #9：进入面板即 PATCH status=drafting（状态机语义对齐）
  */
 import { useEffect, useState } from 'react'
 import { CanvasEditor } from './CanvasEditor'
 import type { TaskDraftView } from './WeaveTaskPanel'
 import type { ClientGraphSpec } from '../types'
-// (no-op) 保留类型导入
 
 export function WeaveEditPanel() {
   const [task, setTask] = useState<TaskDraftView | null>(null)
   const [draftSpec, setDraftSpec] = useState<ClientGraphSpec | null>(null)
+
+  // 决策 #7：主区挤压（body.weave-panel-open → main margin-right 720px）
+  useEffect(() => {
+    if (!task) return
+    document.body.classList.add('weave-panel-open')
+    return () => document.body.classList.remove('weave-panel-open')
+  }, [task])
+
+  // 决策 #9：进入面板即 drafting（B6）
+  const patchDrafting = async (taskId: string): Promise<void> => {
+    try {
+      await fetch(`/api/weave/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'drafting' }),
+      })
+    } catch {
+      // 状态更新失败不阻塞编辑
+    }
+  }
+
+  const openTask = (d: TaskDraftView): void => {
+    setTask(d)
+    setDraftSpec(d.graph as ClientGraphSpec)
+    void patchDrafting(d.taskId)
+  }
 
   useEffect(() => {
     // 已有活跃任务（如页面刷新/历史 propose）→ 直接打开
@@ -21,10 +49,7 @@ export function WeaveEditPanel() {
       .then((r) => (r.ok ? r.json() : []))
       .then((list) => {
         const active = (list as TaskDraftView[]).find((t) => t.status === 'proposing' || t.status === 'drafting')
-        if (active) {
-          setTask(active)
-          setDraftSpec(active.graph)
-        }
+        if (active) openTask(active)
       })
       .catch(() => {})
 
@@ -34,16 +59,14 @@ export function WeaveEditPanel() {
         void fetch(`/api/weave/tasks/${detail.taskId}`)
           .then((r) => (r.ok ? r.json() : null))
           .then((d) => {
-            if (d) {
-              setTask(d as TaskDraftView)
-              setDraftSpec(d.graph as ClientGraphSpec)
-            }
+            if (d) openTask(d as TaskDraftView)
           })
           .catch(() => {})
       }
     }
     window.addEventListener('weave:task-proposed', onTaskProposed)
     return () => window.removeEventListener('weave:task-proposed', onTaskProposed)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   if (!task) return null
@@ -82,7 +105,7 @@ export function WeaveEditPanel() {
   }
 
   return (
-    <div style={{
+    <div className="weave-edit-panel" style={{
       position: 'fixed',
       top: 0,
       right: 0,

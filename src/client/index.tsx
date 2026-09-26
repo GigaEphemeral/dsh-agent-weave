@@ -33,6 +33,8 @@ type ClientContext = Context & { slots?: SlotsLike }
 
 const SLOT_D1 = 'conversation.session.header.actions'
 const SLOT_D3 = 'conversation.view'
+// MVP-5B B6（决策 #8）：常驻挂载用 shell.overlay（真实 Slot 树；设计文档的 app.root 为占位）
+const SLOT_OVERLAY = 'shell.overlay'
 
 export const name = 'dsh-agent-weave-client'
 export const inject = ['slots']
@@ -72,14 +74,15 @@ export function apply(ctx: Context): void {
     }
 
     // MVP-5 Phase I：全局右侧滑出编辑面板 + 用户确认弹窗（挂 header 槽位，聊天页也可见）
+    // MVP-5B B6（决策 #8）：改为常驻挂载到 shell.overlay（不依赖 dashboard 开关）
     try {
-        diag('overlay register start', { slot: SLOT_D1 })
-        slots.inject(SLOT_D1, () => slots.register(
-            { name: SLOT_D1, id: 'weave-edit-panel-host', order: 1 },
+        diag('overlay register start', { slot: SLOT_OVERLAY })
+        slots.inject(SLOT_OVERLAY, () => slots.register(
+            { name: SLOT_OVERLAY, id: 'weave-edit-panel-host', order: 1 },
             WeaveEditPanel,
         ))
-        slots.inject(SLOT_D1, () => slots.register(
-            { name: SLOT_D1, id: 'weave-user-question-host', order: 2 },
+        slots.inject(SLOT_OVERLAY, () => slots.register(
+            { name: SLOT_OVERLAY, id: 'weave-user-question-host', order: 2 },
             UserQuestionModal,
         ))
         diag('overlay register ok')

@@ -152,12 +152,76 @@ export function registerVisualRoutes(
 
     // GET /api/weave/roles —— 角色库（MVP-5 Phase A：搜索/排序）
     if (rest === '/roles' || rest === '/roles/') {
+      if (method === 'POST') {
+        // MVP-5B B6：角色编辑器保存（§5.3）；先读 body 再动态 import（避免事件先于监听注册）
+        const body = await readBody(req)
+        const { saveRoleDefinition } = await import('./role-library.js')
+        const form = {
+          id: typeof body.id === 'string' ? body.id : '',
+          name: typeof body.name === 'string' ? body.name : '',
+          ...(typeof body.description === 'string' ? { description: body.description } : {}),
+          ...(typeof body.order === 'number' ? { order: body.order } : {}),
+          ...(Array.isArray(body.tags) ? { tags: body.tags.map(String) } : {}),
+          ...(typeof body.provider === 'string' ? { provider: body.provider } : {}),
+          ...(typeof body.model === 'string' ? { model: body.model } : {}),
+          ...(Array.isArray(body.capabilities) ? { capabilities: body.capabilities.map(String) } : {}),
+          ...(Array.isArray(body.tools) ? { tools: body.tools.map(String) } : {}),
+          ...(Array.isArray(body.readable) ? { readable: body.readable.map(String) } : {}),
+          ...(Array.isArray(body.inputRequires) ? { inputRequires: body.inputRequires.map(String) } : {}),
+          ...(typeof body.onlyMarkdown === 'boolean' ? { onlyMarkdown: body.onlyMarkdown } : {}),
+          ...(Array.isArray(body.forbidExtensions) ? { forbidExtensions: body.forbidExtensions.map(String) } : {}),
+          ...(Array.isArray(body.requiredSections) ? { requiredSections: body.requiredSections.map(String) } : {}),
+          ...(Array.isArray(body.forbidden) ? { forbidden: body.forbidden.map(String) } : {}),
+        }
+        json(res, 200, saveRoleDefinition(form))
+        return
+      }
       if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
       const { listRoles } = await import('./role-library.js')
       json(res, 200, listRoles({
         search: query.get('search') ?? undefined,
         sort: query.get('sort') === 'name' ? 'name' : 'order',
       }))
+      return
+    }
+
+    // MVP-5B B6：角色编辑器动态候选值（不硬编码，planB §5.4）
+    // GET /api/weave/providers —— provider 列表（dynamic/yaml-scan/static 三级降级）
+    if (rest === '/providers' || rest === '/providers/') {
+      if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+      const { probeProviders } = await import('./provider-registry.js')
+      json(res, 200, probeProviders(ctx))
+      return
+    }
+    // GET /api/weave/capabilities —— 能力枚举
+    if (rest === '/capabilities' || rest === '/capabilities/') {
+      if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+      const { listCapabilities } = await import('./provider-registry.js')
+      json(res, 200, { capabilities: listCapabilities() })
+      return
+    }
+    // GET /api/weave/tools —— 工具白名单候选（从 ctx.tools 反射）
+    if (rest === '/tools' || rest === '/tools/') {
+      if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+      const { probeTools } = await import('./provider-registry.js')
+      json(res, 200, probeTools(ctx))
+      return
+    }
+    // GET /api/weave/graph/:graphId/handoff —— 交接单（合并全局 + 按节点原始；planB §5.2）
+    if (rest.startsWith('/graph/') && /\/handoff\/?$/.test(rest)) {
+      if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+      const graphId = rest.replace('/graph/', '').replace(/\/handoff\/?$/, '')
+      const entry = getGraph(graphId)
+      const root = entry?.artifactsRoot ?? resolveArtifactsRoot({})
+      const { scanHandoffEnvelopes } = await import('../../l2-engine/handoff.js')
+      const { ProjectMemory } = await import('../../l2-engine/project-memory.js')
+      const mem = new ProjectMemory({ artifactsRoot: root })
+      const byNode: Record<string, unknown> = {}
+      for (const { nodeId, envelope } of scanHandoffEnvelopes(root)) {
+        byNode[nodeId] = envelope
+        mem.mergeEnvelope(nodeId, envelope)
+      }
+      json(res, 200, { latest: mem.current(), byNode })
       return
     }
 

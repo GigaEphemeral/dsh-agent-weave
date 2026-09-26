@@ -8,7 +8,7 @@
  * - 选中节点 → 配置抽屉（模型覆盖/输入门禁/审批/输出约束）
  * - 导出 ClientGraphSpec（供保存 / 启动任务）
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ClientGraphSpec } from '../types'
 import {
   buildGraphSpec,
@@ -33,6 +33,91 @@ interface Props {
   onGraphChange?: (spec: ClientGraphSpec) => void
 }
 
+/** MVP-5B B6：节点编辑器弹窗（planB §6.4；双击节点弹出）。 */
+function NodeEditor({
+  node,
+  roles,
+  onSave,
+  onDelete,
+  onClose,
+}: {
+  node: EditorNode
+  roles: Array<{ id: string; name: string }>
+  onSave: (n: EditorNode) => void
+  onDelete: () => void
+  onClose: () => void
+}) {
+  const [draft, setDraft] = useState<EditorNode>({ ...node })
+
+  const inputStyle: React.CSSProperties = { width: '100%', fontSize: 13, padding: '4px 6px', boxSizing: 'border-box' }
+  const labelStyle: React.CSSProperties = { fontSize: 12, color: '#64748b' }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.4)', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ background: '#fff', borderRadius: 12, width: 520, maxWidth: '92vw', padding: 16, boxShadow: '0 8px 32px rgba(0,0,0,.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <h3 style={{ margin: 0, fontSize: 15 }}>节点配置 · {node.roleName}</h3>
+          <button onClick={onClose} style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer' }}>×</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <div style={labelStyle}>节点 ID</div>
+            <input style={inputStyle} value={draft.id} onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={labelStyle}>角色（roleRef）</div>
+            <select style={inputStyle} value={draft.roleRef} onChange={(e) => {
+              const r = roles.find((x) => x.id === e.target.value)
+              setDraft({ ...draft, roleRef: e.target.value, roleName: r?.name ?? e.target.value })
+            }}>
+              {roles.map((r) => <option key={r.id} value={r.id}>{r.name} · {r.id}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <div style={{ flex: 1 }}>
+            <div style={labelStyle}>产物文件名</div>
+            <input style={inputStyle} value={draft.artifactName ?? ''} placeholder={`${draft.id}.md`}
+              onChange={(e) => setDraft({ ...draft, artifactName: e.target.value })} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={labelStyle}>模型覆盖</div>
+            <input style={inputStyle} value={draft.modelOverride ?? ''} placeholder="默认"
+              onChange={(e) => setDraft({ ...draft, modelOverride: e.target.value })} />
+          </div>
+        </div>
+
+        <div style={{ marginTop: 8 }}>
+          <div style={labelStyle}>输入门禁（上游节点 ID，逗号分隔）</div>
+          <input style={inputStyle} value={draft.inputGate ?? ''} placeholder="node-a, node-b"
+            onChange={(e) => setDraft({ ...draft, inputGate: e.target.value })} />
+        </div>
+
+        <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 13 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input type="checkbox" checked={draft.onlyMarkdown ?? false}
+              onChange={(e) => setDraft({ ...draft, onlyMarkdown: e.target.checked })} /> 仅 .md
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input type="checkbox" checked={draft.approval ?? false}
+              onChange={(e) => setDraft({ ...draft, approval: e.target.checked })} /> 需用户审批
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14 }}>
+          <button onClick={onDelete} style={{ padding: '6px 12px', cursor: 'pointer', color: '#ef4444', border: '1px solid #ef4444', background: '#fff', borderRadius: 6 }}>删除节点</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={onClose} style={{ padding: '6px 12px', cursor: 'pointer' }}>取消</button>
+            <button onClick={() => onSave(draft)} style={{ padding: '6px 16px', cursor: 'pointer', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6 }}>保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
   const [nodes, setNodes] = useState<EditorNode[]>(() =>
     (initialGraph?.nodes ?? []).map((n, i) => ({
@@ -47,8 +132,18 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
     (initialGraph?.edges ?? []).filter((e) => e.type === 'seq').map((e) => ({ from: e.from, to: e.to })),
   )
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null) // MVP-5B B6：双击编辑
+  const [roles, setRoles] = useState<Array<{ id: string; name: string }>>([])
   const [suggestion, setSuggestion] = useState<{ sourceId: string; items: Array<{ roleRef: string; label?: string; reason?: string }> } | null>(null)
   const [counter, setCounter] = useState(initialGraph?.nodes.length ?? 0)
+
+  // MVP-5B B6：角色库候选（节点编辑器 roleRef 下拉，动态拉取不硬编码）
+  useEffect(() => {
+    fetch('/api/weave/roles')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setRoles(Array.isArray(d) ? (d as Array<{ id: string; name: string }>) : []))
+      .catch(() => setRoles([]))
+  }, [])
 
   const positioned = useMemo(() => layoutNodes(nodes, edges), [nodes, edges])
 
@@ -156,10 +251,8 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
             }}
             onClick={() => selectNode(n.id)}
             onDoubleClick={() => {
-              // MVP-5 Phase F：双击打开 subagent 视图（best-effort，依赖宿主路由）
-              const childId = n.roleRef
-              const url = `#/subagent/${childId}`
-              try { window.open(url, '_blank') } catch { /* 忽略 */ }
+              // MVP-5B B6：双击弹出节点编辑器（验收 10.3#7）
+              setEditingId(n.id)
             }}
             style={{
               position: 'absolute',
@@ -250,8 +343,32 @@ export function CanvasEditor({ initialGraph, onGraphChange }: Props) {
             />
             仅 .md
           </label>
+          <button onClick={() => setEditingId(selected.id)} style={{ marginLeft: 'auto', fontSize: 12, cursor: 'pointer', padding: '2px 8px' }}>⚙ 配置</button>
         </div>
       )}
+
+      {/* MVP-5B B6：节点编辑器（双击节点 / 选中后 ⚙ 配置） */}
+      {editingId && (() => {
+        const target = positioned.find((n) => n.id === editingId)
+        if (!target) return null
+        return (
+          <NodeEditor
+            node={target}
+            roles={roles}
+            onClose={() => setEditingId(null)}
+            onDelete={() => {
+              removeNode(target.id)
+              setEditingId(null)
+            }}
+            onSave={(n) => {
+              const ns = nodes.map((x) => (x.id === target.id ? n : x))
+              setNodes(ns)
+              emit(ns, edges)
+              setEditingId(null)
+            }}
+          />
+        )
+      })()}
     </div>
   )
 }

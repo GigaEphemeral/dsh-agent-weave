@@ -17,6 +17,7 @@ import { RunHistoryPanel } from './RunHistoryPanel'
 import { RestorePanel } from './RestorePanel'
 import { RoleLibraryPanel } from './RoleLibraryPanel'
 import { WeaveTaskPanel } from './WeaveTaskPanel'
+import { HandoffViewer } from './HandoffViewer'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { useGraphStream } from '../hooks/useGraphStream'
 import { useActivityFeed } from '../hooks/useActivityFeed'
@@ -75,6 +76,8 @@ export function WeaveDashboardView(_owner: ConvViewOwnerProps = {}) {
           <ErrorBoundary><RestorePanel graphId={graphId} /></ErrorBoundary>
           <ErrorBoundary><RoleLibraryPanel /></ErrorBoundary>
           <ErrorBoundary><WeaveTaskPanel /></ErrorBoundary>
+          {/* MVP-5B B6：交接单查看器（累积 facts/artifacts/openIssues/unmet） */}
+          <ErrorBoundary><HandoffViewer graphId={graphId} /></ErrorBoundary>
         </div>
       </div>
     </ErrorBoundary>

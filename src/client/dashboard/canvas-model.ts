@@ -21,6 +21,8 @@ export interface EditorNode {
   inputGate?: string
   approval?: boolean
   onlyMarkdown?: boolean
+  /** MVP-5B B6：产物文件名（缺省 <nodeId>.md）。 */
+  artifactName?: string
 }
 
 /** 按 seq 边分层布局（同层节点竖直排布）。 */
@@ -59,7 +61,13 @@ export function buildGraphSpec(nodes: EditorNode[], edges: Array<{ from: string;
   return {
     entryPoint: nodes[0]?.id ?? '',
     maxIterations: 25,
-    nodes: nodes.map((n) => ({ id: n.id, roleRef: n.roleRef, nodeType: 'role' })),
+    nodes: nodes.map((n) => ({
+      id: n.id,
+      roleRef: n.roleRef,
+      nodeType: 'role',
+      ...(n.artifactName !== undefined && n.artifactName.trim() !== '' ? { artifactName: n.artifactName.trim() } : {}),
+      ...(n.inputGate !== undefined && n.inputGate.trim() !== '' ? { inputGate: { requires: n.inputGate.split(/[,，]/).map((x) => x.trim()).filter(Boolean) } } : {}),
+    })),
     edges: edges.map((e) => ({ from: e.from, to: e.to, type: 'seq' })),
   }
 }
