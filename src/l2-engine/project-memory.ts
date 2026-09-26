@@ -1,135 +1,123 @@
 /**
- * ProjectMemory + Facts 机制（MVP-5 问题 4：多角色重复探测）。
+ * ProjectMemory（MVP-5B B1 重写）：仅持有最新 envelope + 按节点 envelope 索引。
  *
- * 核心：R1 探测结论经产物 YAML front-matter 声明 → 引擎解析 → 注入下游 prompt，
- * 下游角色"已确认事实"不再重复探测。
+ * 方案 B（MVP-5planB §4.6）：从"facts 列表"升级为"持有结构化交接单 envelope"，
+ * 依赖方向严格单向（E8）：handoff-schema ← handoff ← 本文件。
  *
- * 冲突语义（验收 8.2#6）：后探测覆盖前探测，但标记 conflict。
+ * 兼容层：setFact/setFacts/all/conflicts/byCategory/extractFactsFromMarkdown 保留为
+ * deprecated 转发（渐进迁移，不破坏既有调用；验收 10.1#10）。
  */
-import { load as yamlLoad } from 'js-yaml'
+import type { HandoffEnvelope, ProjectFact } from './handoff-schema.js'
+import { mergeEnvelopes, buildHandoffSection } from './handoff.js'
+import { parseFrontMatter } from './handoff-schema.js'
 
-export type FactCategory = 'environment' | 'api' | 'constraint' | 'file-system' | 'reference' | 'other'
-
-export interface ProjectFact {
-  /** 唯一键，如 env.python.version / api.tencent.qt.status */
-  key: string
-  category: FactCategory
-  value: string
-  confidence: 'confirmed' | 'assumed' | 'conflict'
-  summary: string
-  /** 来源节点/角色，如 R1-requirement */
-  source: string
-}
-
-export interface FactConflict {
-  key: string
-  previous: ProjectFact
-  current: ProjectFact
-}
-
-export interface FactRecord {
-  key?: unknown
-  category?: unknown
-  value?: unknown
-  confidence?: unknown
-  summary?: unknown
-}
-
-/** 解析 Markdown 顶部 YAML front-matter 中的 facts 数组（R1 输出规范）。 */
-export function extractFactsFromMarkdown(content: string, source: string): ProjectFact[] {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content)
-  if (!match) return []
-  let data: unknown
-  try {
-    data = yamlLoad(match[1] ?? '')
-  } catch {
-    return []
-  }
-  if (!data || typeof data !== 'object' || !('facts' in data)) return []
-  const list = (data as { facts?: unknown }).facts
-  if (!Array.isArray(list)) return []
-
-  const facts: ProjectFact[] = []
-  for (const item of list) {
-    if (!item || typeof item !== 'object') continue
-    const rec = item as FactRecord
-    if (typeof rec.key !== 'string' || rec.key === '') continue
-    const category = typeof rec.category === 'string' ? rec.category as FactCategory : 'other'
-    if (!['environment', 'api', 'constraint', 'file-system', 'reference', 'other'].includes(category)) continue
-    facts.push({
-      key: rec.key,
-      category,
-      value: typeof rec.value === 'string' ? rec.value : String(rec.value ?? ''),
-      confidence: rec.confidence === 'assumed' || rec.confidence === 'conflict' ? rec.confidence : 'confirmed',
-      summary: typeof rec.summary === 'string' ? rec.summary : '',
-      source,
-    })
-  }
-  return facts
+export interface ProjectMemoryOptions {
+  /** 产物根目录（B2 图执行时传入；解析/展示使用）。 */
+  artifactsRoot?: string
 }
 
 /** 项目事实共享层（单图实例内跨节点共享）。 */
 export class ProjectMemory {
-  private readonly facts = new Map<string, ProjectFact>()
-  private readonly conflictLog: FactConflict[] = []
+  private latest: HandoffEnvelope | null = null
+  private readonly byNode = new Map<string, HandoffEnvelope>()
 
-  /** 记录事实；同 key 不同 value → 后值覆盖前值并标记 conflict。 */
-  setFact(fact: ProjectFact): void {
-    const prev = this.facts.get(fact.key)
-    if (prev !== undefined && prev.value !== fact.value) {
-      const conflictFact: ProjectFact = {
-        ...fact,
-        confidence: 'conflict',
-        summary: fact.summary ? `${fact.summary}（与 ${prev.source} 的 "${prev.value}" 冲突）` : `与 ${prev.source} 的 "${prev.value}" 冲突`,
-      }
-      this.facts.set(fact.key, conflictFact)
-      this.conflictLog.push({ key: fact.key, previous: prev, current: fact })
-    } else {
-      this.facts.set(fact.key, fact)
-    }
+  constructor(private readonly opts: ProjectMemoryOptions = {}) {}
+
+  // ─── 新 API ──────────────────────────────────────────
+
+  /** 合并某节点的交接单到全局累积（byNode 记录原始，latest 合并后）。 */
+  mergeEnvelope(nodeId: string, envelope: HandoffEnvelope): void {
+    this.byNode.set(nodeId, envelope)
+    this.latest = mergeEnvelopes(this.latest, envelope)
   }
 
+  /** 合并后的全局交接单（无任何节点时为 null）。 */
+  current(): HandoffEnvelope | null {
+    return this.latest
+  }
+
+  /** 某节点的原始交接单（不存在返回 null）。 */
+  byNodeId(nodeId: string): HandoffEnvelope | null {
+    return this.byNode.get(nodeId) ?? null
+  }
+
+  /** 生成下游 prompt 注入段（无交接数据时返回空串）。 */
+  toPromptSection(myRole = ''): string {
+    return this.latest ? buildHandoffSection(this.latest, myRole) : ''
+  }
+
+  /** 产物根目录（B2 解析 artifact 相对路径用）。 */
+  get root(): string | undefined {
+    return this.opts.artifactsRoot
+  }
+
+  // ─── 兼容层（保留旧 API，内部转发；deprecated） ─────────────
+
+  /**
+   * @deprecated 用 mergeEnvelope(nodeId, envelope)。
+   * 空态（latest === null）自动创建空 envelope 再合并（E5）。
+   */
+  setFact(fact: ProjectFact): void {
+    if (!this.latest) this.latest = emptyEnvelope()
+    this.latest = mergeEnvelopes(this.latest, { ...this.latest, facts: [fact] })
+  }
+
+  /** @deprecated 用 mergeEnvelope。 */
   setFacts(facts: readonly ProjectFact[]): void {
     for (const f of facts) this.setFact(f)
   }
 
+  /** @deprecated 用 current()?.facts。 */
   all(): ProjectFact[] {
-    return [...this.facts.values()]
+    return this.latest?.facts ?? []
   }
 
-  conflicts(): readonly FactConflict[] {
-    return [...this.conflictLog]
+  /** @deprecated 用 current()?.facts.filter(f => f.confidence === 'conflict')。 */
+  conflicts(): ProjectFact[] {
+    return (this.latest?.facts ?? []).filter((f) => f.confidence === 'conflict')
   }
 
-  byCategory(): Map<FactCategory, ProjectFact[]> {
-    const map = new Map<FactCategory, ProjectFact[]>()
-    for (const f of this.facts.values()) {
+  /** @deprecated 保留兼容（按 category 分组）。 */
+  byCategory(): Map<string, ProjectFact[]> {
+    const map = new Map<string, ProjectFact[]>()
+    for (const f of this.all()) {
       const list = map.get(f.category) ?? []
       list.push(f)
       map.set(f.category, list)
     }
     return map
   }
+}
 
-  /** 生成下游 prompt 注入段落；无事实时返回空串。 */
-  toPromptSection(): string {
-    if (this.facts.size === 0) return ''
-    const categoryTitle: Record<FactCategory, string> = {
-      environment: '环境事实',
-      api: '接口事实',
-      constraint: '已知约束',
-      'file-system': '文件系统事实',
-      reference: '参考文档事实',
-      other: '其他事实',
-    }
-    const lines: string[] = ['项目事实（上游已确认，请不要重复探测）：']
-    for (const [category, list] of this.byCategory()) {
-      lines.push(`### ${categoryTitle[category]}`)
-      for (const f of list) {
-        const marker = f.confidence === 'conflict' ? '!' : '✓'
-        lines.push(`  ${marker} ${f.summary || f.value}  [来自 ${f.source}]`)
-      }
-    }
-    return lines.join('\n')
+/** 空 envelope（E5：空态 setFact 的起始壳）。 */
+function emptyEnvelope(): HandoffEnvelope {
+  return {
+    schemaVersion: '1.0',
+    graphId: '',
+    nodeId: '',
+    roleRef: '',
+    at: Date.now(),
+    artifacts: [],
+    facts: [],
+    environment: { verified: [], unmet: [] },
+    openIssues: [],
+    handoff: { upstream: [], downstream: [], completed: false },
   }
 }
+
+// ─── 兼容层：旧函数转发 ────────────────────────────────────
+
+/**
+ * @deprecated 用 parseFrontMatter + parseHandoffFromMarkdown。
+ * 只导入 handoff-schema.js（E8：兼容层不依赖 handoff.js）。
+ */
+export function extractFactsFromMarkdown(content: string, source: string): ProjectFact[] {
+  const fm = parseFrontMatter(content)
+  if (!fm?.facts) return []
+  return fm.facts.map((f) => ({ ...f, source }))
+}
+
+/** 兼容类型 re-export（旧导入路径）。 */
+export type { ProjectFact, HandoffEnvelope }
+/** 兼容：旧 category 枚举别名（handoff-schema 的 category 枚举）。 */
+export type FactCategory = ProjectFact['category']
