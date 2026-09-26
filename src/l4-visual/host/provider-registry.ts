@@ -29,12 +29,9 @@ export interface ProvidersResponse {
   providers: ProviderInfo[]
   probedAt: number
   overallSource: ProviderSource
+  /** 功能问题1 §3：非 dynamic 时给前端的降级警告。 */
+  warning?: string
 }
-
-/** Capabilities 枚举（planB §5.4：8 个通用值，平台级不特化）。 */
-export const DEFAULT_CAPABILITIES: readonly string[] = [
-  'read', 'analyze', 'write-doc', 'write-code', 'run-cmd', 'run-tests', 'review', 'spawn',
-]
 
 /** static 兜底 Provider 列表（仅当 dynamic 与 yaml-scan 均为空时启用）。 */
 const STATIC_PROVIDERS: readonly ProviderInfo[] = []
@@ -126,41 +123,51 @@ export function probeProviders(ctx: Context): ProvidersResponse {
   let providers = [...byId.values()]
   if (providers.length === 0) providers = [...STATIC_PROVIDERS]
 
-  return { providers, probedAt: Date.now(), overallSource }
+  const warning = overallSource !== 'dynamic'
+    ? `Provider 列表来源：${overallSource}（非实时探测），实际可用 provider 以 DSH 环境为准`
+    : undefined
+
+  return { providers, probedAt: Date.now(), overallSource, ...(warning !== undefined ? { warning } : {}) }
 }
 
-/** Capabilities 枚举（静态平台值）。 */
-export function listCapabilities(): string[] {
-  return [...DEFAULT_CAPABILITIES]
+/** Capabilities 枚举（固定平台值；功能问题1 §2.5：带 label）。 */
+export const DEFAULT_CAPABILITIES: readonly { id: string; label: string }[] = [
+  { id: 'read', label: '读取' },
+  { id: 'analyze', label: '分析/设计' },
+  { id: 'write-doc', label: '撰写文档' },
+  { id: 'write-code', label: '编写代码' },
+  { id: 'run-cmd', label: '执行命令' },
+  { id: 'run-tests', label: '运行测试' },
+  { id: 'review', label: '独立评审' },
+  { id: 'spawn', label: '派生 subagent' },
+]
+
+/** Capabilities 枚举（返回 { id, label }[]）。 */
+export function listCapabilities(): Array<{ id: string; label: string }> {
+  return DEFAULT_CAPABILITIES.map((c) => ({ ...c }))
 }
 
-/** 从 ctx.tools 反射可用工具名（dynamic）；反射失败回退 yaml-scan 角色工具。 */
-export function probeTools(ctx: Context): { tools: string[]; source: ProviderSource } {
-  const dynamic = probeToolsDynamic(ctx)
-  if (dynamic.length > 0) return { tools: dynamic, source: 'dynamic' }
-  return { tools: probeToolsYamlScan(), source: 'yaml-scan' }
+/**
+ * subagent 工具白名单（功能问题1 §2.3 修复）：
+ * 角色（subagent）能用的工具是 toolFilter 白名单——固定枚举，
+ * 不是主 agent 的 ctx.tools（那批是 CLI 命令）。
+ */
+export const SUBAGENT_TOOLS: readonly { id: string; label: string; desc: string }[] = [
+  { id: 'read', label: '读取文件', desc: '读取工作区文件内容' },
+  { id: 'glob', label: '文件搜索', desc: '按 glob 模式搜索文件' },
+  { id: 'grep', label: '内容搜索', desc: '按正则搜索文件内容' },
+  { id: 'write', label: '写入文件', desc: '创建/覆盖文件' },
+  { id: 'edit', label: '编辑文件', desc: '修改已有文件' },
+  { id: 'pwsh', label: '执行命令', desc: '运行 shell 命令' },
+  { id: 'ask_user_question', label: '询问用户', desc: '向用户提问' },
+]
+
+/** 角色工具白名单（固定；不反射主 agent 工具表）。 */
+export function listSubagentTools(): Array<{ id: string; label: string; desc: string }> {
+  return SUBAGENT_TOOLS.map((t) => ({ ...t }))
 }
 
-function probeToolsDynamic(ctx: Context): string[] {
-  try {
-    const schemas = ctx.tools?.schemas?.()
-    if (!Array.isArray(schemas)) return []
-    return schemas
-      .map((s: { name?: string }) => s.name)
-      .filter((n: string | undefined): n is string => typeof n === 'string' && n.length > 0)
-      .sort()
-  } catch {
-    return []
-  }
-}
-
-function probeToolsYamlScan(): string[] {
-  try {
-    const roles = loadRoleDefinitions(getRolesDir())
-    const set = new Set<string>()
-    for (const role of roles) for (const t of role.tools) if (t) set.add(t)
-    return [...set].sort()
-  } catch {
-    return []
-  }
+/** @deprecated 用 listSubagentTools（原反射主 agent ctx.tools，内容错误）。 */
+export function probeTools(_ctx: Context): { tools: string[]; source: ProviderSource } {
+  return { tools: SUBAGENT_TOOLS.map((t) => t.id), source: 'static' }
 }

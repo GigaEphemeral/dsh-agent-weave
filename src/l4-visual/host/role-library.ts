@@ -13,14 +13,24 @@ import { loadRoleDefinitions } from '../../l3-roles/role-loader.js'
 import { RoleDefinitionSchema, RoleSchemaError, type RoleDefinition, type RoleConsumeItem } from '../../shared/types.js'
 
 let rolesDir: string | null = null
+let skillsDir: string | null = null
 
 /** 设置角色目录（由 index.ts 单一真相源传入；未设置时用默认当前目录 roles）。 */
 export function setRolesDir(dir: string): void {
   rolesDir = dir
 }
 
+/** 设置技能目录（由 index.ts 单一真相源传入；SKILL.md 展示用）。 */
+export function setSkillsDir(dir: string): void {
+  skillsDir = dir
+}
+
 export function getRolesDir(): string {
   return rolesDir ?? process.cwd() + '/roles'
+}
+
+export function getSkillsDir(): string {
+  return skillsDir ?? process.cwd() + '/skills'
 }
 
 export interface RoleListQuery {

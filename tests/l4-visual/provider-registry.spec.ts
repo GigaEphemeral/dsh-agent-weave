@@ -2,9 +2,9 @@
  * MVP-5B B6：Provider / Capabilities / Tools 探测注册表单测。
  *
  * 覆盖：
- * - probeProviders：dynamic（ctx.subagents 反射）优先；yaml-scan 补齐；三级降级
- * - probeTools：ctx.tools.schemas() 反射；失败回退 yaml-scan
- * - listCapabilities：8 个通用枚举
+ * - probeProviders：dynamic（ctx.subagents 反射）优先；yaml-scan 补齐；三级降级 + warning
+ * - listSubagentTools：固定 subagent 白名单（功能问题1 §2：非主 agent 工具表）
+ * - listCapabilities：8 个通用枚举（带 label）
  * - 反例（验收 10.4#1/#2）：前端不硬编码 provider id / 具体工具名
  */
 import { describe, expect, it } from 'vitest'
@@ -13,8 +13,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   listCapabilities,
+  listSubagentTools,
   probeProviders,
-  probeTools,
   DEFAULT_CAPABILITIES,
 } from '../../src/l4-visual/host/provider-registry'
 import { setRolesDir } from '../../src/l4-visual/host/role-library'
@@ -101,28 +101,37 @@ describe('probeProviders', () => {
   })
 })
 
-describe('probeTools / listCapabilities', () => {
-  it('从 ctx.tools.schemas() 反射（dynamic）', () => {
-    const ctx = makeCtx({ tools: ['grep', 'read', 'glob'] })
-    const r = probeTools(ctx)
-    expect(r.source).toBe('dynamic')
-    expect(r.tools).toEqual(['glob', 'grep', 'read'])
+describe('listSubagentTools / listCapabilities（功能问题1 §2 修复）', () => {
+  it('工具白名单：固定 subagent 工具（read/glob/grep/write/edit/pwsh/ask_user_question），非主 agent 工具表', () => {
+    const tools = listSubagentTools()
+    expect(tools.map((t) => t.id)).toEqual([
+      'read', 'glob', 'grep', 'write', 'edit', 'pwsh', 'ask_user_question',
+    ])
+    // 每项带 label + desc（前端显示"读取文件 read"而非裸 id）
+    const read = tools.find((t) => t.id === 'read')
+    expect(read?.label).toBe('读取文件')
+    expect(read?.desc.length).toBeGreaterThan(0)
+    // 不包含主 agent CLI 工具
+    expect(tools.some((t) => t.id.startsWith('weave_'))).toBe(false)
   })
 
-  it('无 ctx.tools → 回退 yaml-scan（角色 tools 聚合）', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'weave-tools-scan-'))
+  it('capabilities：8 个通用枚举，带 label', () => {
+    const caps = listCapabilities()
+    expect(caps).toHaveLength(8)
+    expect(caps[0]).toMatchObject({ id: 'read', label: '读取' })
+    expect(DEFAULT_CAPABILITIES).toHaveLength(8)
+  })
+
+  it('probeProviders 非 dynamic 时带 warning（功能问题1 §3）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'weave-prov-warn-'))
     try {
       writeFileSync(join(dir, 'R1-requirement.yaml'), r1Yaml, 'utf8')
       setRolesDir(dir)
-      const r = probeTools(makeCtx({ tools: undefined }))
-      expect(r.tools).toEqual(['grep', 'read'])
+      const r = probeProviders(makeCtx({ providers: [], tools: undefined }))
+      expect(r.overallSource).toBe('yaml-scan')
+      expect(r.warning).toContain('非实时探测')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
-
-  it('capabilities：8 个通用枚举', () => {
-    expect(listCapabilities()).toEqual([...DEFAULT_CAPABILITIES])
-    expect(DEFAULT_CAPABILITIES).toHaveLength(8)
   })
 })

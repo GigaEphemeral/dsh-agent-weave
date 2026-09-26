@@ -1,6 +1,9 @@
 /**
  * weave_run_chain 测试工具（MVP-1 P1.2.4 触发入口）。
  *
+ * ⚠️ 功能问题1 P0：**已废弃，不再注册**（src/index.ts 已移除 registerChainTool）。
+ * 保留文件仅为历史参考；主 agent 的 weave_graph_help 契约明确禁止调用 weave_run_chain。
+ *
  * ⚠️ 工具名必须符合 OpenAI 兼容端点的函数名规范 `^[a-zA-Z0-9_-]{1,128}$`。
  *    🐛 实测：原名 `weave:run-chain` 含冒号，被火山引擎端点拒绝
  *    （400 InvalidParameter: tools.N.function.name expected 1-128 ASCII

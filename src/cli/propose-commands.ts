@@ -22,9 +22,11 @@ export function registerProposeCommand(ctx: Context): () => void {
     defineTool({
       name: 'weave_propose_task',
       description:
-        '创建 weave 任务草稿并打开右侧编辑面板。**不直接执行图**。' +
-        '用于用户说"用 weave 创建/编排 XXX"时。' +
-        '用户会在面板中编辑工作流（角色/门禁/模型），确认后点击【开始工作】才执行。',
+        '【首选工具】当用户说"用 weave 创建/编排/做 XXX"时，**必须调用此工具**。' +
+        '创建一个任务草稿并打开右侧编辑面板，用户编辑后点【开始工作】才执行图。' +
+        '调用后请向用户报告"面板已打开，请编辑后点【开始工作】"，然后停止等待（不要等图跑完，图还没开始跑）。' +
+        '**禁止**用 weave_run_chain（已废弃，会中止）或 weave_run_graph（跳过编辑）替代。' +
+        '**禁止**在会话已有活跃任务时再次调用（会返回错误提示）。',
       parameters: {
         user_input: { type: 'string', required: true, description: '用户一句话需求' },
         template: {
@@ -53,7 +55,13 @@ export function registerProposeCommand(ctx: Context): () => void {
           const existing = guard.existing
           return [
             `❌ 已有活跃任务（${existing.taskId}，状态：${existing.status}）。`,
-            '请先完成、取消或等待该任务结束，再创建新任务。',
+            '',
+            '请选择一个操作：',
+            '  1. 等用户完成当前任务',
+            '  2. 调用 POST /api/weave/tasks/:taskId/cancel 取消当前任务',
+            '  3. 若用户想开新任务，先取消当前任务',
+            '',
+            '**不要**尝试不同模板重复调用 weave_propose_task。',
           ].join('\n')
         }
 

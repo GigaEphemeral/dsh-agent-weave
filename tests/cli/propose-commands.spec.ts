@@ -62,6 +62,9 @@ describe('weave_propose_task', () => {
     const taskId = /task-\d+-[a-z0-9]+/.exec(first)?.[0] ?? ''
     const second = await tool.execute({ user_input: 'B' }, makeExec(sessionId))
     expect(second).toContain('已有活跃任务')
+    // 功能问题1 修复 D：拒绝同时带引导（取消操作 / 不要重复调用）
+    expect(second).toContain('取消当前任务')
+    expect(second).toContain('不要')
     deleteTask(taskId)
   })
 

@@ -4,13 +4,12 @@ import { existsSync } from 'node:fs'
 
 import type { Context } from '@deepseek-ai/cordis'
 import { compileRoleDirectory } from './l3-roles/role-loader.js'
-import { registerChainTool } from './l2-engine/chain-tool.js'
 import { registerGraphCommands } from './cli/graph-commands.js'
 import { registerVisualCommands } from './cli/graph-visual-commands.js'
 import { registerGraphRunCommand } from './cli/graph-run-commands.js'
 import { registerGraphResumeCommand } from './cli/graph-resume-commands.js'
 import { registerProposeCommand } from './cli/propose-commands.js'
-import { setRolesDir } from './l4-visual/host/role-library.js'
+import { setRolesDir, setSkillsDir } from './l4-visual/host/role-library.js'
 import { GraphEngineService } from './l2-engine/graph-service.js'
 import { registerVisualRuntime } from './l4-visual/host/visual-runtime.js'
 import { logger } from './shared/logger.js'
@@ -73,6 +72,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   // MVP-5 Phase A：角色库服务共享角色目录（单一真相源）
   setRolesDir(rolesDir)
+  setSkillsDir(skillsDir) // 功能问题1 §5：SKILL.md 只读展示
 
   // ★ 单一真相源：打印一次，便于诊断
   console.log(
@@ -129,7 +129,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   }
 
   // ─── 工具 & 服务注册 ──────────────────────────────────────
-  registerChainTool(ctx)
+  // 功能问题1 P0：移除 weave_run_chain（MVP-1 遗留演示工具，会给 LLM 错误引导）
   registerGraphCommands(ctx)
   registerVisualCommands(ctx)
   // ★ 关键：把已解析的 rolesDir 传给图执行命令（单一真相源）

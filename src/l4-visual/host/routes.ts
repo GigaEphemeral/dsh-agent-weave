@@ -193,18 +193,30 @@ export function registerVisualRoutes(
       json(res, 200, probeProviders(ctx))
       return
     }
-    // GET /api/weave/capabilities —— 能力枚举
+    // GET /api/weave/capabilities —— 能力枚举（固定，带 label）
     if (rest === '/capabilities' || rest === '/capabilities/') {
       if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
       const { listCapabilities } = await import('./provider-registry.js')
       json(res, 200, { capabilities: listCapabilities() })
       return
     }
-    // GET /api/weave/tools —— 工具白名单候选（从 ctx.tools 反射）
+    // GET /api/weave/tools —— 角色工具白名单（功能问题1 §2.3：固定 subagent 白名单，非主 agent 工具表）
     if (rest === '/tools' || rest === '/tools/') {
       if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
-      const { probeTools } = await import('./provider-registry.js')
-      json(res, 200, probeTools(ctx))
+      const { listSubagentTools } = await import('./provider-registry.js')
+      json(res, 200, { tools: listSubagentTools() })
+      return
+    }
+    // GET /api/weave/roles/:roleId/skill —— SKILL.md 只读展示（功能问题1 §5）
+    const skillMatch = /^\/roles\/([^/]+)\/skill$/.exec(rest)
+    if (skillMatch) {
+      if (method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+      const { existsSync, readFileSync } = await import('node:fs')
+      const { join } = await import('node:path')
+      const { getSkillsDir } = await import('./role-library.js')
+      const skillPath = join(getSkillsDir(), skillMatch[1] ?? '', 'SKILL.md')
+      if (!existsSync(skillPath)) { json(res, 404, { error: 'skill not found' }); return }
+      json(res, 200, { content: readFileSync(skillPath, 'utf8') })
       return
     }
     // GET /api/weave/graph/:graphId/handoff —— 交接单（合并全局 + 按节点原始；planB §5.2）
