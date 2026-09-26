@@ -7,6 +7,7 @@
  * 来源：RES.10 §一.1/2/4 提炼的实际签名 + RES.8 §三 graphVersion 双字段 + DSH 实测。
  */
 import type { Context } from '@deepseek-ai/cordis'
+import type { HandoffEnvelope } from './handoff-schema.js'
 
 /** 结构化日志接口（与 shared/logger 对齐，解耦引擎对具体实现的依赖）。 */
 export interface Logger {
@@ -168,6 +169,11 @@ export interface PauseSnapshot<T> {
   loopUsage: Record<string, number>
   childSessions: Record<string, string>
   completedNodes: string[]
+  /** MVP-5B B5：暂停时的全局交接单快照（恢复时重建 projectMemory，下游 prompt 不丢上游交接）。 */
+  projectMemorySnapshot?: {
+    latest: HandoffEnvelope
+    byNode: Record<string, HandoffEnvelope>
+  } | undefined
 }
 
 /** 节点元数据（NEW-10：currentRole 数据来源）。 */

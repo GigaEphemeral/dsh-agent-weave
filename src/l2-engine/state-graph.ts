@@ -40,6 +40,7 @@ import { classifyError } from './error-classifier.js'
 import { writePauseSnapshot } from './pause-snapshot.js'
 import { ProjectMemory } from './project-memory.js'
 import { parseHandoffFromMarkdown, readHandoffJson, writeHandoffJson } from './handoff.js'
+import type { HandoffEnvelope } from './handoff-schema.js'
 import { runPreflightChecks, type PreflightCheck } from './environment-gate.js'
 import { checkOutputGate, type OutputGateOptions } from './output-gate.js'
 import { waitForSubagentEnd, PauseError } from './subagent-waiter.js'
@@ -897,6 +898,15 @@ export function createStateGraph<T extends Record<string, unknown>>(
                 loopUsage: Object.fromEntries(loopUsed),
                 childSessions: Object.fromEntries(childIdByNode),
                 completedNodes: [...completedNodes],
+                // MVP-5B B5：暂停时快照全局交接单（恢复时重建 projectMemory）
+                ...(projectMemory?.current()
+                  ? {
+                      projectMemorySnapshot: {
+                        latest: projectMemory.current() as HandoffEnvelope,
+                        byNode: Object.fromEntries([...projectMemory.allByNode()]),
+                      },
+                    }
+                  : {}),
               }
               writePauseSnapshot(artifactsRoot, snapshot)
               emit({

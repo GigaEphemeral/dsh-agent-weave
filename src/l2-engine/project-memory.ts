@@ -41,6 +41,11 @@ export class ProjectMemory {
     return this.byNode.get(nodeId) ?? null
   }
 
+  /** 全部节点的原始交接单（MVP-5B B5：暂停快照序列化用）。 */
+  allByNode(): ReadonlyMap<string, HandoffEnvelope> {
+    return this.byNode
+  }
+
   /** 生成下游 prompt 注入段（无交接数据时返回空串）。 */
   toPromptSection(myRole = ''): string {
     return this.latest ? buildHandoffSection(this.latest, myRole) : ''

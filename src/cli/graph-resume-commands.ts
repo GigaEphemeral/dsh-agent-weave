@@ -62,10 +62,17 @@ export async function resumeGraphRealTool(
   const bus = setGlobalBus(graphId)
   bus.handle({ type: 'graph/start', graphId, timestamp: Date.now() })
 
-  // MVP-5B B2：恢复场景从 productions/*/handoff.json 重建项目记忆（下游 prompt 仍能读到上游交接单）
+  // MVP-5B B2/B5：恢复场景重建项目记忆（优先暂停快照 projectMemorySnapshot；
+  // 缺失时从 productions/*/handoff.json 扫描重建——下游 prompt 仍能读到上游交接单）
   const projectMemory = new ProjectMemory({ artifactsRoot: root })
-  for (const { nodeId, envelope } of scanHandoffEnvelopes(root)) {
-    projectMemory.mergeEnvelope(nodeId, envelope)
+  if (snapshot.projectMemorySnapshot) {
+    for (const [nodeId, envelope] of Object.entries(snapshot.projectMemorySnapshot.byNode)) {
+      projectMemory.mergeEnvelope(nodeId, envelope)
+    }
+  } else {
+    for (const { nodeId, envelope } of scanHandoffEnvelopes(root)) {
+      projectMemory.mergeEnvelope(nodeId, envelope)
+    }
   }
 
   const graph = createStateGraph<Record<string, unknown>>(

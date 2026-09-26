@@ -14,6 +14,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { createStateGraph } from '../../src/l2-engine/state-graph'
 import { classifyError } from '../../src/l2-engine/error-classifier'
 import { writePauseSnapshot, readPauseSnapshot, removePauseSnapshot } from '../../src/l2-engine/pause-snapshot'
+import { ProjectMemory } from '../../src/l2-engine/project-memory'
 
 const RO = { graphVersion: '0.1.0', graphSchemaHash: 'hash' }
 
@@ -97,5 +98,31 @@ describe('问题五修复4：暂停快照读写', () => {
     expect(s?.childSessions.dev).toBe('child-1')
     removePauseSnapshot(root, 'g1')
     expect(readPauseSnapshot(root, 'g1')).toBeNull()
+  })
+
+  it('MVP-5B B5：projectMemorySnapshot 往返（写 → 读 → 恢复可重建 projectMemory）', () => {
+    const base = {
+      schemaVersion: '1.0' as const,
+      graphId: 'g1', roleRef: 'R1', at: 100,
+      artifacts: [], facts: [], environment: { verified: [], unmet: [] },
+      openIssues: [], handoff: { upstream: [], downstream: [], completed: false },
+    }
+    const envA = { ...base, nodeId: 'node-a', facts: [{ key: 'k', category: 'environment' as const, value: 'v', confidence: 'confirmed' as const, summary: '', source: 'A' }] }
+    writePauseSnapshot(root, {
+      graphId: 'g1', graphVersion: 'v', graphSchemaHash: 'h',
+      pausedNode: 'node-b', pausedAt: Date.now(), iteration: 2, resumeFrom: 'node-b',
+      pauseReason: 'permission-denied', pauseDetails: { error: 'EACCES' },
+      state: {}, loopUsage: {}, childSessions: {}, completedNodes: ['node-a'],
+      projectMemorySnapshot: { latest: envA, byNode: { 'node-a': envA } },
+    })
+    const s = readPauseSnapshot(root, 'g1')
+    expect(s?.projectMemorySnapshot?.latest.facts[0]?.key).toBe('k')
+    expect(s?.projectMemorySnapshot?.byNode['node-a']).toBeDefined()
+    // 恢复：用快照重建 ProjectMemory → 下游 prompt 可注入
+    const mem = new ProjectMemory()
+    for (const [nodeId, env] of Object.entries(s?.projectMemorySnapshot?.byNode ?? {})) {
+      mem.mergeEnvelope(nodeId, env)
+    }
+    expect(mem.toPromptSection('node-b')).toContain('【上游交接单】')
   })
 })
