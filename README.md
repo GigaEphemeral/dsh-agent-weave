@@ -1,10 +1,11 @@
-# 可视化 Agent 任务编排工具
+# 可视化 Agent 任务编排工具（dsh-agent-weave）
 
-> **一句话目标**：实现一个可视化的 Agent 任务编排工具——用户输入一句话需求，自动拆解为工作流任务图，多角色 subagent 按图协作（含循环与条件回退），激活状态全程可视化，每个 Agent 独立记忆防污染，可互相对话，角色支持导入文件创建与画布连线。
+> **一句话目标**：实现一个可视化的 Agent 任务编排工具——用户输入一句话需求，自动拆解为工作流任务图，多角色 subagent 按图协作（含循环与条件回退），激活状态全程可视化，每个 Agent 独立记忆防污染，角色支持画布连线与编辑器创建，节点间以**结构化交接单**传递事实与契约。
 
-[![Status](https://img.shields.io/badge/status-MVP--1%20%E5%B7%B2%E5%AE%8C%E6%88%90-brightgreen)]()
-[![DSH](https://img.shields.io/badge/DSH-0.1.15--rc2-green)]()
+[![Status](https://img.shields.io/badge/status-MVP--5B%20%E5%B7%B2%E5%AE%8C%E6%88%90-brightgreen)]()
+[![DSH](https://img.shields.io/badge/DSH-0.1.5--rc.2-green)]()
 [![Node](https://img.shields.io/badge/Node-%5E22.19%20%7C%7C%20%3E%3D24-green)]()
+[![Tests](https://img.shields.io/badge/tests-388%20%E5%85%A8%E7%BB%BF-brightgreen)]()
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
 ---
@@ -12,24 +13,22 @@
 ## 目录
 
 - [当前状态](#当前状态)
-- [MVP-1 动工清单](#mvp-1-动工清单)
+- [开发阶段总览](#开发阶段总览)
 - [功能特性](#功能特性)
 - [交互方式](#交互方式)
-- [实现方案简述](#实现方案简述)
+- [代码结构](#代码结构)
+- [核心机制](#核心机制)
   - [分层架构](#分层架构)
-  - [核心对象模型](#核心对象模型)
+  - [结构化交接单（方案 B）](#结构化交接单方案-b)
   - [StateGraph 编排引擎](#stategraph-编排引擎)
-  - [记忆隔离机制](#记忆隔离机制)
-  - [消息总线与防死锁](#消息总线与防死锁)
-  - [观察者机制](#观察者机制)
-  - [Token 熔断与优化](#token-熔断与优化)
+  - [记忆隔离与角色管线](#记忆隔离与角色管线)
+  - [门禁与容错](#门禁与容错)
+  - [Web 看板与交互](#web-看板与交互)
 - [关键设计决策](#关键设计决策)
+- [测试与验证](#测试与验证)
+- [开发与部署](#开发与部署)
 - [依赖与参考](#依赖与参考)
-  - [官方库（DeepSeek Harness 官方）](#官方库deepseek-harness-官方)
-  - [社区库（DSH 生态插件，学习/可选）](#社区库dsh-生态插件学习可选)
-  - [外部开源参考（非 DSH 插件）](#外部开源参考非-dsh-插件)
-- [开发路线图（MVP）](#开发路线图mvp)
-- [风险与缓解](#风险与缓解)
+- [遗留与真实环境项](#遗留与真实环境项)
 - [许可证](#许可证)
 
 ---
@@ -38,240 +37,223 @@
 
 | 项 | 状态 |
 |---|---|
-| **当前阶段** | **MVP-4 已完成 ✅**（阶段0 + 预研 + Phase A/B/C/D/E + 问题 1-5 修复；Web 实时看板可用） |
-| **下一步** | **MVP-5 画布编辑 + D2 侧栏常驻**（即将动工） |
-| **运行环境** | Windows 11 + DSH **0.1.5-rc.2**（实测；文档旧标 0.1.5-rc2）+ Node 22.23 + pnpm 12.3 |
-| **开发路径** | Host CLI（MVP-1/2/3）→ **Web 看板（MVP-4）**：D1 页头按钮 + D3 主区切换 |
-| **MVP-1 实绩** | 一句话需求 → 六角色串行 → **产出 58KB 可直接运行的 `index.html`**（23 分钟 / 21.2 万 token） |
-| **MVP-4 实绩** | **284 测试全绿**；真实环境 REST/SSE 回归通过；图节点实时染色 / Token 分账 / 审批 / 观察者信号 / 消息流（零 token）/ 暂停-恢复-终止-断点恢复 |
+| **当前阶段** | **MVP-5B 已完成 ✅**（结构化交接单方案 B，B1-B7 全过） |
+| **版本** | `dsh-agent-weave@0.2.9` |
+| **代码规模** | src 约 90 个 TS/TSX 文件；6 角色（R1/R2/R4/R6/R7/R8）；**62 测试文件 / 388 测试全绿** |
+| **运行环境** | Windows 11 + DSH **0.1.5-rc.2** + Node 22.23 + pnpm 12.3 |
+| **真实环境验证** | 由用户在测试环境 **http://127.0.0.1:3081/** 执行（见 [开发与部署](#开发与部署)） |
 
-**MVP-4 核心使命**：从 CLI 终端视图升级为 **Web 实时看板**——用户点页头"Weave 看板"按钮 → 主区切换为全屏看板 → 实时看到图节点染色、节点活动、Token 分账、审批待办、观察者信号、消息流，并可暂停/恢复/终止/审批/从 checkpoint 恢复。
+**已完成的里程碑**：
 
-**MVP-1 要回答的四个问题**（**全部验证通过 ✅**）：
-
-| # | 待验证问题 | 结论 |
+| MVP | 内容 | 门禁/验证 |
 |---|---|---|
-| Q1 | 角色 YAML 能否编译为可注册的 SubagentProvider？ | ✅ 6 角色编译/注册/执行成功 |
-| Q2 | 记忆隔离是否真的生效？ | ✅ `inheritsParentContext=false` + 6 独立 session |
-| Q3 | toolFilter 是否真的按角色限定工具？ | ✅ 角色注入 `toolFilter.allow` + 官方 `tools.restrict()` |
-| Q4 | 多角色能否通过 workflowEngine 串行协作？ | ✅ 六阶段串行 completed（改用自写编排，见 D-001） |
-
-> **MVP-1 产出**：插件 `dsh-agent-weave@0.1.0`（角色编译管线 + 单链编排 + 可观测性）、
-> 6 角色资产、56 单测、8 份过程文档、7 条遗留坑（见 `docs/MVP-1/process/MVP-1阶段总结与遗留.md`）。
-> **MVP-4 产出**：插件 `dsh-agent-weave@0.2.8`（Web 看板 + 图引擎 + 断点恢复 + 子代理治理），284 单测。
+| **0** | 角色资产 R1-R10 skill + 3 横切纪律 | ✅ |
+| **1** | 角色 YAML 编译 + 单链编排验证（记忆隔离/toolFilter/产物落盘） | ✅ 四项门禁全过 |
+| **2** | 自研 StateGraph 引擎（图 DSL/条件边/循环回退/熔断/checkpoint） | ✅ 循环+熔断+确定性测试 |
+| **3** | 状态+交接+消息总线+断点恢复+Token 分账+观察者 L2+审批分级 | ✅ 可恢复/可分账/可对话 |
+| **4** | Web 实时看板（D1 按钮+D3 主区）+ 图染色 + 审批 + 消息流 + 恢复 | ✅ 问题 1-5 修复 |
+| **5** | 画布编辑器 + 角色库 + 任务面板 + 门禁（环境/输出）+ 输入门禁 + 项目事实 | ✅ 59 文件 / 352 测试 |
+| **5B** | **结构化交接单**（方案 B）：交接单 envelope + 引擎注入 + 门禁回写 + 角色契约 + 前端交互 | ✅ 62 文件 / 388 测试 |
 
 ---
 
-## MVP-1 动工清单
-
-### 任务总览（12 个任务，~11d）
-
-| 任务 ID | 任务名称 | 交付物 | 状态 |
-|---|---|---|---|
-| **P1.1.0** | Windows 环境验证 | 环境验证报告 | ✅ |
-| **P1.1.1** | 插件脚手架搭建 | `package.json` + 构建配置 + `src/index.ts` | ✅ |
-| **P1.1.2** | L0-L5 目录骨架 | 目录结构 | ✅ |
-| **P1.1.3** | 共享类型定义 | `src/shared/types.ts` + Zod Schema | ✅ |
-| **P1.1.4** | 结构化日志基础设施 | `src/shared/logger.ts` | ✅ |
-| **P1.1.5** | 角色 YAML Schema | `src/l3-roles/role-schema.ts` | ✅ |
-| **P1.1.6** | 角色 Provider 编译器 | `src/l3-roles/role-loader.ts` | ✅ |
-| **P1.1.7** | Cordis 生命周期验证 | 最小 effect 注册/注销 + 热重载测试 | ✅ |
-| **P1.2.1** | 单链编排脚本 | 串行 R1→R2→R4→R6→R7→R8（自写编排，见 D-001） | ✅ |
-| **P1.2.2** | 记忆隔离验证 | 验证报告 | ✅ |
-| **P1.2.3** | toolFilter 验证 | 验证报告 | ✅ |
-| **P1.2.4** | 单链闭环端到端测试 | 测试记录（真实 LLM：产出可运行 index.html） | ✅ |
-
-> 详细完成情况与遗留坑见 `docs/MVP-1/process/MVP-1阶段总结与遗留.md`。
-
-### 依赖关系
+## 开发阶段总览
 
 ```
-P1.1.0 环境验证
-    ↓
-P1.1.1 脚手架搭建 ──→ P1.1.2 目录骨架 ──→ P1.1.3 共享类型
-    │                        │                  │
-    ↓                        ↓                  ↓
-P1.1.7 生命周期验证    P1.1.4 日志基础设施   P1.1.5 角色 Schema
-                             │                  │
-                             └──────────────────┘
-                                        │
-                                        ↓
-                              P1.1.6 Provider 编译器
-                                        │
-                                        ↓
-                              P1.2.1 workflowEngine 脚本
-                                        │
-                              ┌─────────┴─────────┐
-                              ↓                   ↓
-                       P1.2.2 记忆隔离     P1.2.3 toolFilter
-                              │                   │
-                              └─────────┬─────────┘
-                                        ↓
-                              P1.2.4 端到端测试
+MVP-0 角色资产 ──▶ MVP-1 单链验证 ──▶ MVP-2 StateGraph 引擎（质变点）
+                                          │
+                                          ▼
+                          MVP-3 状态+交接+消息+恢复
+                                          │
+                                          ▼
+                          MVP-4 Web 实时看板（体验质变点）
+                                          │
+                                          ▼
+                          MVP-5 画布编辑+角色库+门禁
+                                          │
+                                          ▼
+                          MVP-5B 结构化交接单（✅ 当前）
+                                          │
+                                          ▼
+                          MVP-6 打磨+生态（⏳ 未开始）
 ```
 
-**并行点**：P1.1.4 与 P1.1.5 可并行；P1.2.2 与 P1.2.3 可并行。
-
-### MVP-1 门禁（四项，必须全部通过）
-
-| # | 门禁 | 验证方式 | 不通过的后果 |
-|---|---|---|---|
-| 1 | **多角色顺序跑通真实小任务** | 端到端测试脚本 | 角色协作闭环不成立，MVP-2 无法开始 |
-| 2 | **产物落盘** | 检查 `productions/<角色ID>/` 目录 | 交接机制不成立 |
-| 3 | **记忆隔离验证通过** | R3 与 R5 的 Session 不共享 | G4 命门失效，全盘设计需重审 |
-| 4 | **chat 中可见 workflow 节点** | DSH Web 界面检查 | workflowEngine 集成失败 |
-
-### Windows 环境注意事项
-
-| 风险 | 缓解 |
-|---|---|
-| **npx / pnpm dlx 卡死** | 使用 `npm install -g @deepseek-ai/dsh` 全局安装 |
-| **构建增量状态损坏** | `pnpm run clean` 后重新构建 |
-| **Client 入口非 .tsx** | 入口文件必须是 `.tsx` 才能写 JSX |
-| **路径逃逸** | 编译期校验 `system_prompt_ref` 路径在 `skillsDir` 内 |
-| **model 传参不完整** | 强制检查 `agentOptions` 是完整 `{ provider, model }` 对象 |
-| **Cordis 双副本** | 使用 scoped Cordis（`@deepseek-ai/cordis`），不保留 unscoped import |
-| **热重载资源泄漏** | 所有资源 `ctx.effect()` 注册 + 热重载测试入门禁 |
+- **质变点 = MVP-2**：从"一堆 skill"到"编排工具"。
+- **体验质变点 = MVP-4**：从"跑完看结果"到"实时可看可控"。
+- **MVP-5B**：把"上下游节点间的信息传递"从"路径清单"升级为"结构化交接单"，让下游**读得到、不重复探测、能被阻塞**。
 
 ---
 
 ## 功能特性
 
-- **一句话需求 → 工作流图**：用户输入自然语言需求，自动拆解为可执行的节点任务图。
-- **非线性编排**：支持顺序、条件分支、循环回退（如开发→测试→审核→开发循环）与并行分支（预留）。
-- **激活状态可视化**：实时展示谁在运行、等待谁、产出什么，节点状态（idle/pending/running/waiting/done/error）实时染色。
-- **记忆纯洁性**：每个 Agent 拥有独立 subagent session，不共享上下文，仅通过文件与消息交接，防止污染。
-- **Agent 间定向对话**：支持 Agent 之间定向消息传递（handoff / query / feedback / escalation），由编排器中转，具备防死锁机制。
-- **角色自定义**：支持通过 YAML 文件导入角色定义（特质、工具、模型、质量门、Token 预算、handoff 依赖），并通过画布连线定义交互逻辑。
-- **观察者机制**：可配置并发观察者（如质量观察者）在节点执行过程中静默监视产出，按关注级别发出 GREEN/YELLOW/RED 信号，实现早期偏离预警。
-- **Token 消耗监控与熔断**：分账到角色与节点，支持软/硬阈值熔断，并提供 `art://` 工件引用等 Token 优化。
-- **可恢复与可审计**：基于 checkpoint 的断点恢复，RunLedger 不可变审计账本，事件流对齐 OpenTelemetry 语义。
+- **一句话需求 → 工作流图**：用户输入自然语言需求，自动拆解为可执行的节点任务图（`weave_propose_task`）。
+- **画布编辑**：从角色库拖入角色、点击连线（seq）、推荐下一步、节点配置抽屉（模型覆盖/输入门禁/审批/输出约束）、节点编辑器（双击弹窗，可改 roleRef/产物名/门禁）。
+- **角色管理**：角色库（搜索/排序/描述）、**角色编辑器**（新建/编辑，provider/model/capabilities/tools 全部动态候选，不硬编码）、角色 YAML 落盘。
+- **非线性编排**：顺序、条件分支、循环回退（含迭代熔断），并行边语法预留。
+- **记忆纯洁性**：每个 Agent 独立 subagent session（`inheritsParentContext=false`），仅通过产物文件与交接单交接。
+- **结构化交接单（MVP-5B）**：
+  - 引擎写 `productions/<节点>/handoff.json`（LLM 只写 markdown front-matter，引擎补全 hash/size/source）
+  - 下游 prompt 自动注入【上游交接单】：产物契约 / 已确认事实（禁止重复探测）/ 未满足（遇到必须停）/ 指派问题
+  - facts 冲突标记（conflict）、unmet **累积式**传递（prev 未解决继续传，curr verified 同 key 才移除）、openIssues 同 id 关闭
+  - 前端 HandoffViewer 展示累积交接单（可切按节点查看原始）
+- **门禁与容错**：Environment Gate（前置检查，不满足 → 图暂停不静默降级，回写 verified/unmet）、Output Gate（职责越界扫描，回写 scannedArtifacts）、质量门、输入门禁（上游产物存在且非空）。
+- **实时看板**：节点状态实时染色、节点活动流、Token 分账（按角色）、审批待办、观察者信号、消息流（零 token）、运行历史、恢复点。
+- **运行控制**：启动、暂停、恢复、终止；从 checkpoint 恢复；暂停快照含交接单快照（`projectMemorySnapshot`），恢复不丢上游交接。
+- **可观测性**：RunLedger 不可变审计账本（OTel 对齐）、轨迹事件流式落盘、结构化日志、日志过滤/搜索。
 
 ---
 
 ## 交互方式
 
-1. **输入需求**：用户在 Web UI 中输入一句话需求，系统自动生成初始工作流图。
-2. **画布编排**：用户可在画布上拖拽角色节点、连线定义交互（顺序/条件/循环），并配置循环退出条件与熔断阈值。
-3. **角色导入**：通过导入 YAML 角色文件，动态创建新角色或修改现有角色元数据（特质、工具、模型、质量门等）。
-4. **实时看板**：
-   - 节点状态实时染色，展示当前激活的 Agent。
-   - 查看每个节点的 Token 消耗、执行时长、产出物引用。
-   - 观察者信号（GREEN/YELLOW/RED）在画布上可视化，并记录关注度热力图。
-5. **人工审批**：分级审批机制（L1 轻量异步、L2 标准同步、L3 紧急同步+告警），用户可干预循环回退或异常终止。
-6. **运行控制**：支持启动、暂停、恢复、中断工作流，从最近 checkpoint 恢复执行。
+1. **输入需求**：聊天中一句话需求 → 主 agent 调 `weave_propose_task` → SSE `task-proposed` → 右侧编辑面板自动滑出（常驻挂载，不依赖看板开关）。
+2. **画布编排**：拖入角色节点、点击连线、推荐下一步、双击节点弹编辑器、配置门禁/模型/审批。
+3. **角色创建/编辑**：角色库 `+ 新建` / `⚙ 编辑` → 角色编辑器 → 保存落盘 `roles/<id>.yaml` → 角色库立即可见。
+4. **实时看板**：图节点实时染色、节点活动、Token 分账、审批、观察者信号、**交接单查看器**。
+5. **人工审批**：审批门 / 用户确认弹窗（`ask_user_question` 链路），暂停时用户回答后恢复。
+6. **运行控制**：暂停/恢复/终止；从 checkpoint 或暂停快照恢复。
 
 ---
 
-## 实现方案简述
+## 代码结构
+
+```
+3pluginCode/
+├── src/
+│   ├── index.ts                 # 插件入口（角色注册 + 命令 + 可视化运行时）
+│   ├── shared/                  # 类型（RoleDefinition/Zod）+ 结构化日志 + 错误分类
+│   ├── cli/                     # DSH 工具命令
+│   │   ├── graph-commands.ts    #   weave_graph_validate/show/help/watch/report/status/tail
+│   │   ├── graph-run-commands.ts#   weave_run_graph（真实图执行，异步返回 graphId）
+│   │   ├── graph-resume-commands.ts # weave_graph_resume（暂停快照恢复）
+│   │   ├── graph-visual-commands.ts # 看板/报告命令
+│   │   └── propose-commands.ts  #   weave_propose_task（一句话 → 任务草稿）
+│   ├── l1-subagent/             # （占位：官方 @deepseek-ai/dsh-subagent 复用）
+│   ├── l2-engine/               # ★ 编排引擎
+│   │   ├── handoff-schema.ts    #   [B1] 交接单纯 schema + parseFrontMatter + validateEnvelope
+│   │   ├── handoff.ts           #   [B1/B2] parse/merge/build + handoff.json IO + 兼容层
+│   │   ├── project-memory.ts    #   [B1] 持有全局交接单 envelope + 新/旧 API
+│   │   ├── state-graph.ts       #   [B2] 引擎核心：节点注入交接单 + 完成后回写
+│   │   ├── environment-gate.ts  #   [B3] 环境门禁 → PreflightResult(verified/unmet)
+│   │   ├── output-gate.ts       #   [B3] 输出门禁 → scannedArtifacts(hash/size)
+│   │   ├── graph-definition.ts / static-validator.ts / condition-edge.ts
+│   │   ├── atomic-merge.ts / concurrency-counter.ts / checkpoint.ts
+│   │   ├── message-bus.ts / deadlock-guard.ts / task-tree.ts
+│   │   ├── pause-snapshot.ts / types.ts / error-classifier.ts
+│   │   ├── subagent-waiter.ts / subagent-events.ts / wait-for.ts / restart.ts
+│   │   ├── chain-runner.ts / chain-tool.ts / mvp1-chain.ts   # ⚠️ MVP-1 遗留演示链
+│   │   └── graph-service.ts / approval-policy.ts / node-validator.ts
+│   ├── l3-roles/                # 角色管理：role-schema / role-loader / lifecycle-manager / workflow-package
+│   ├── l4-visual/
+│   │   ├── host/                # 可视化宿主
+│   │   │   ├── routes.ts        #   REST：/tasks /roles /providers /capabilities /tools /handoff /graphs ...
+│   │   │   ├── provider-registry.ts # [B6] provider 三级探测（dynamic/yaml-scan/static）
+│   │   │   ├── role-library.ts  #   [B6] 角色库 + saveRoleDefinition 落盘
+│   │   │   ├── task-store.ts / graph-store.ts / log-reader.ts / activity-reader.ts
+│   │   │   ├── sse-broker.ts / shared-bus.ts / event-bus.ts / event-bridge.ts
+│   │   │   ├── approval-service.ts / spec-registry.ts / run-history.ts
+│   │   │   ├── artifacts-root.ts / visual-runtime.ts / graph-control.ts
+│   │   │   └── html-report.ts / terminal-view.ts / loop-detector.ts
+│   │   └── shared/              # 事件 schema
+│   ├── client/                  # 前端（React，esbuild 打包）
+│   │   ├── index.tsx            # 入口：页头按钮 + 看板 + shell.overlay 常驻挂载（编辑面板/确认弹窗）
+│   │   ├── dashboard/
+│   │   │   ├── CanvasEditor.tsx #   画布（拖入/连线/推荐/节点编辑器）
+│   │   │   ├── RoleLibraryPanel.tsx # 角色库（+新建/⚙编辑）
+│   │   │   ├── RoleEditor.tsx   #   [B6] 角色编辑器（动态候选）
+│   │   │   ├── HandoffViewer.tsx #  [B6] 交接单查看器
+│   │   │   ├── WeaveEditPanel.tsx # 右侧滑出编辑面板（主区挤压 + 进入即 drafting）
+│   │   │   ├── UserQuestionModal.tsx / WeaveTaskPanel.tsx / WeaveDashboardView.tsx
+│   │   │   ├── GraphCanvas.tsx / ControlBar.tsx / TokenPanel.tsx / ApprovalPanel.tsx
+│   │   │   └── SignalPanel.tsx / MessageFlowPanel.tsx / NodeActivityPanel.tsx
+│   │   │   └── RunHistoryPanel.tsx / RestorePanel.tsx / canvas-model.ts
+│   │   ├── hooks/               # useGraphStream / useActivityFeed
+│   │   └── state/ types.ts      # 看板类型
+│   ├── l5-observability/        # run-ledger / token-collector
+│   └── observers/               # observer-l1 / observer-l2 / signal
+├── roles/                       # 6 个角色 YAML（R1/R2/R4/R6/R7/R8）
+├── skills/<角色>/SKILL.md       # 角色 prompt（含【必读】上游交接单 +【必写】你的交接单契约）
+├── tests/                       # 62 个 spec 文件 / 388 测试
+├── test-env/                    # 隔离测试环境 + verify-mvp5.ps1 一键验证
+├── docs/                        # 开发计划/契约/MVP 各阶段文档（decisions/探索/...）
+├── scripts/build-client.mjs     # 前端 esbuild 打包
+├── tsconfig.json / tsconfig.client.json / tsdown.config.ts
+└── package.json                 # dsh-agent-weave@0.2.9
+```
+
+**产物目录（运行期）**：
+
+```
+<workspace>/productions/
+├── <节点>/            # 每个图节点一个目录（MVP-5B：无 graph-artifacts 中间层）
+│   ├── <artifact>.md  # 节点产物（LLM 输出，含 front-matter）
+│   └── handoff.json   # 交接单（引擎写，LLM 不写）
+├── traces/            # 轨迹事件流 graph-*.jsonl
+└── pauses/            # 暂停快照 <graphId>.json（含 projectMemorySnapshot）
+```
+
+---
+
+## 核心机制
 
 ### 分层架构
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ L5 可观测性与治理层                                            │
-│  执行轨迹追踪 · RunLedger 审计账本 · 策略合规 · 成本熔断         │
+│ L5 可观测性层：RunLedger 审计账本 · Token 分账 · 轨迹事件流      │
 ├──────────────────────────────────────────────────────────────┤
-│ L4 可视化层                                                    │
-│  画布编辑器 · 实时激活状态 · Token 监控 · 观察者信号展示          │
+│ L4 可视化层：画布编辑器 · 角色编辑器 · 交接单查看器 · 实时看板    │
 ├──────────────────────────────────────────────────────────────┤
-│ L3 角色管理层                                                  │
-│  YAML 配置 · 角色导入 · 观察者配置 · 生命周期与并发限制           │
+│ L3 角色管理层：YAML 定义 · 角色库 · 角色编辑器落盘 · 生命周期     │
 ├──────────────────────────────────────────────────────────────┤
-│ L2 编排引擎层（自研 StateGraph）                                │
-│  图 DSL · 条件边 · 循环回退 · 迭代熔断 · checkpoint · 消息总线    │
+│ L2 编排引擎层：StateGraph · 交接单(handoff) · 门禁 · checkpoint  │
 ├──────────────────────────────────────────────────────────────┤
-│ L1 执行与记忆层（官方 @deepseek-ai/dsh-subagent）               │
-│  Continuable 子代理 · 独立 Session · 记忆隔离 · 持久化            │
+│ L1 执行与记忆层（官方 @deepseek-ai/dsh-subagent）              │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-- **复用层**：L1 直接使用官方 `@deepseek-ai/dsh-subagent`，无需自研记忆隔离。
-- **自建层**：L2 自研 StateGraph 引擎，L3 角色管理，L4 可视化，L5 可观测与治理。
+### 结构化交接单（方案 B）
 
-**MVP-1 只激活 L3 的部分模块**（角色 Schema + Provider 编译器）+ L1 的复用（`ctx.subagents`），其余层占位不实现。
+**机制与内容分离**：平台只提供【机制】（字段结构/解析语法/合并语义/prompt 模板/探测接口），不提供【内容】（键名约定/值/领域术语由角色层与 LLM 运行时填充）。
 
-### 核心对象模型
+**三层分工**：
 
-系统围绕六个对象展开，分三层结构：
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│ 协作层（定义"谁在什么条件下和谁协作"）                          │
-│   Workflow（图）= Agent 之间的协作协议                         │
-│   Agent（角色）= 执行者                                        │
-├──────────────────────────────────────────────────────────────┤
-│ 执行层（协作过程中产生的具体工作）                              │
-│   Task（任务）= Agent 拆解出的工作单元                         │
-│     · 根 Task 由用户需求产生，路由到入口 Agent                  │
-│     · Agent 执行 Task 时可拆解为子 Task，指派给下游 Agent       │
-│     · Task 树自然形成：根 → 子 → 孙                            │
-├──────────────────────────────────────────────────────────────┤
-│ 状态层（执行过程中的数据与历史）                                │
-│   State（共享状态）· Memory（角色记忆）· RunLedger（运行账本）  │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**核心洞察**：**Agent 拆解 Task，Task 驱动 Agent**。Workflow 图定义的是 Agent 之间的协作协议，不是"Task 的容器"。具体交给谁、拆解出什么 Task，是 Agent 在执行时根据 Task 内容和图的条件边动态决定的。
-
-| 对象 | 定义 | 落点 |
+| 层 | 负责 | 示例 |
 |---|---|---|
-| **Agent（角色）** | 特质 + 工具 + 模型 + 质量门 + 预算 + 观察者配置 | `R1-R10 skill`（Prompt 内容）+ `YAML` 元数据 |
-| **Workflow（图）** | 节点 = 角色/任务，边 = 顺序/条件/循环/并行 | 图 DSL（JSON） |
-| **Task（任务实例）** | 一句话 → 根任务 → 子任务树 | 任务树（storageDomain） |
-| **State（共享状态）** | Phase / active_agent / artifacts / 质量门 / retry 计数 | `DevTeamState` |
-| **Memory（角色记忆）** | 每 Agent 独立 context + 交接物 | 独立 subagent session + 工作区文件 |
-| **RunLedger（运行账本）** | 不可变事件流：节点事件 + Token 分账 + 合规状态 + 人工介入 | storageDomain（只追加） |
+| 平台层 | schema、解析、注入、合并 | `HandoffEnvelope` 字段定义 |
+| 角色层 | 键名规范、必填项、交互约定 | "环境事实用 `<domain>.<entity>.<attr>` 三层命名" |
+| 数据层 | 具体内容 | LLM 探测/生成的结果 |
+
+**数据流**：节点完成 → 解析产物 front-matter → 补全 hash/size/source → 写 `handoff.json` → 合并进全局 `ProjectMemory` → 下一节点启动时注入【上游交接单】→ 下游不重复探测、遇 unmet 停止、处理指派问题。
+
+**合并语义（用户决策）**：facts 冲突标 conflict；verified 同 key 保留最新；**unmet 累积式**（prev 未解决继续传，curr verified 同 key 才移除）；openIssues 同 id 关闭；handoff.upstream 累积去重。
 
 ### StateGraph 编排引擎
 
-- **状态定义**：`DevTeamState` 包含 `messages[]`、`current_phase`、`active_agent`、`artifacts{}`、`quality_gate_status`、`retry_count`、`max_iterations`（默认 25 熔断）。
-- **图 DSL**：`GraphDefinitionSpec` 定义 `nodes`（角色/条件/审批）、`edges`（seq/cond/loop/parallel）、`checkpoint` 策略、`metadata`（source / graphVersion）。
-- **原子合并**：节点只返回 `Partial<State>`，引擎统一原子合并，保证可恢复性与一致性。
-- **条件边与循环**：质量审核输出 `retry` → 回退到开发节点并递增 `retry_count`；达到 `max_iterations` → 强制进入人工审批节点。
-- **并行分支**：预留 `parallel` 边语法，MVP-2 仅实现串行 + 条件 + 循环。
-- **静态验证器**：加载图 DSL 时检查节点/边引用一致性，毫秒级捕获集成错误。
+- 自研引擎（非 workflowEngine script）：`addNode / addSubagent / addEdge / addLoopEdge / addConditionalEdge / addApprovalGate / run`。
+- 节点返回 `Partial<State>`，引擎原子合并（冲突 reject-on-conflict）。
+- 迭代熔断（默认 25）+ 边级熔断 + 全局并发闸（排队）。
+- checkpoint 在"补丁合并后、跳转前"，落盘 loopUsage；恢复时读回。
+- 轨迹事件 8+ 种（graph/* 契约），可选流式落盘 traces/*.jsonl。
 
-### 记忆隔离机制
+### 记忆隔离与角色管线
 
-- **官方能力直接复用**：每个角色通过 `startContinuable()` 创建持久化子代理，`inheritsParentContext=false` 确保全新隔离上下文。
-- **交接双通道**：
-  - 产出物 = 文件（durable），落盘至共享工作区，通过 `art://` 引用传递。
-  - 即时协商 = 消息（transient），通过 `sendMessage` 定向发送。
-- **不共享 context**：Agent 之间不读取彼此的推理过程，只读取文件系统和工作产出。
+- 角色 YAML → Zod 校验 → `compileRoleToProvider`（persona/toolFilter/agentOptions/inheritsParentContext）。
+- 子代理 `startContinuable` 建 durable child（同节点复用，循环回退 sendMessage 追加反馈）。
+- 输入门禁：上游产物存在且非空才启动节点。
 
-### 消息总线与防死锁
+### 门禁与容错
 
-- **父代理中转**：A → 父（编排器）→ B，父代理解析目标并转发。
-- **防死锁分级恢复**：
-  - 单条消息超时 → 重试（最多 2 次）。
-  - 同一 Agent 在同链路被触发 ≥3 次 → 强制终止链路 + 写入 RunLedger。
-  - 整个工作流超时 → 降级到人工审批节点。
+- **Environment Gate**：节点启动前逐条执行 preflight；不满足 → `EnvironmentGateError`（携带 unmet）→ 图暂停等待用户决策（禁止静默降级）；满足 → verified 回写交接单。
+- **Output Gate**：产物落盘后扫描（仅 .md / 禁止扩展名 / 禁止内容特征），失败 → permission-denied 暂停；scannedArtifacts（hash/size）回写交接单。
+- **质量门**：产物非空/数量验证，失败 → 节点失败整图停。
+- **错误分类**：permission/dependency/budget/timeout/environment-gate → 需人工介入 → 暂停快照 + 通知。
 
-### 观察者机制
+### Web 看板与交互
 
-观察者是**正交增强层**，不改变图拓扑，与质量审核节点互补。
-
-| 层级 | 模式 | 触发时机 | 介入方式 | Token 开销 |
-|---|---|---|---|---|
-| **L1 轻量检查** | 中间件拦截 | 每个节点执行前后 | 纯函数检查（格式、权限、命名规范），不调用 LLM | 零 |
-| **L2 静默观察** | 并发审计者 | 每个角色节点完成后 | 文件观察（`git diff`、读取产出），按关注级别发信号 | 低（仅在发现关注时调用 LLM） |
-| **L3 深度审查** | 流式观察者 | 质量门节点、循环回退前 | 完整 LLM 审查，返回 BLOCK/SANITIZE/FLAG | 高（按需启用） |
-
-- **观察者原则**：只读、非阻塞、文件观察优先、记忆隔离、分级介入、fail-open。
-- **信号分级**：GREEN（继续） / YELLOW（记录并标记） / RED（触发早期回退）。
-
-### Token 熔断与优化
-
-- **熔断机制**：
-  - 软阈值 80% → 上下文压缩 / 滑动窗口摘要。
-  - 硬阈值 100% → 人工审批 / 降级。
-  - 优先复用官方 `@deepseek-ai/dsh-agent-budget`，挂载 `dsh-discipline-guard` 作为兜底。
-- **优化措施**：
-  - System Prompt 分离不变/可变部分，使用 Prompt Caching。
-  - `art://` 工件引用：长产出落盘，消息只传引用 + 紧凑语义摘要。
-  - 循环回退只传结构化 diff，分层审核（轻量初筛 + 重模型终审）。
-  - 看板推送仅含增量（nodeId + status），完整 State 按需拉取。
+- **常驻挂载**（决策 #8）：编辑面板 + 用户确认弹窗挂 `shell.overlay`，不依赖看板开关。
+- **主区挤压**（决策 #7）：面板打开时 `body.weave-panel-open` → 主区 margin-right 720px，主 agent 仍可见。
+- **进入即 drafting**（决策 #9）：面板打开即 PATCH 任务状态。
+- **动态候选**（B6 反例）：前端 provider/model/capabilities/tools 全部来自 REST 探测，0 硬编码。
 
 ---
 
@@ -280,12 +262,67 @@ P1.1.7 生命周期验证    P1.1.4 日志基础设施   P1.1.5 角色 Schema
 | 决策点 | 结论 |
 |---|---|
 | 编排引擎 | ✅ 自研 StateGraph（非 workflowEngine script） |
-| 运行时底座 | ✅ 分层复用：subagents（执行）+ 自建（引擎/角色/画布/治理）；**不依赖 experimental agentTeams** |
-| 角色定义 | ✅ YAML 元数据 + `system_prompt_ref` 指向 skill 文件 |
-| 开发路径 | ✅ 纯 Host CLI 先行（MVP-1/2 不碰 UI） |
-| 编排 vs 可视化 | ✅ 编排（MVP-2）前置于可视化（MVP-4） |
-| 观察者机制 | ✅ 作为正交增强层，MVP-2 实现 L1，MVP-3 实现 L2，MVP-6 按需 L3 |
-| Task 建模 | ✅ **Agent 拆解出 Task，Task 树自然形成**（不是"预先定义 Task 列表再指派给 Agent"） |
+| 运行时底座 | ✅ 分层复用：subagents（执行）+ 自建（引擎/角色/画布/治理）；不依赖 experimental agentTeams |
+| 交接单写入 | ✅ handoff.json 由引擎写，LLM 只写 front-matter（结构稳定） |
+| 交接单载体 | ✅ front-matter 而非独立 JSON（LLM 更熟悉，文件随 md 移动） |
+| unmet 合并 | ✅ **累积式**（用户决策：prev 未解决继续传递，curr verified 同 key 才移除） |
+| 产物目录 | ✅ `productions/<节点>/`（用户决策：无 graph-artifacts 中间层，与文档验收一致） |
+| 面板常驻 | ✅ shell.overlay 常驻挂载（真实 Slot 树；设计文档的 app.root 为占位） |
+| 前端候选值 | ✅ 全动态探测，0 硬编码 provider id / 工具名 |
+| 依赖方向 | ✅ 严格单向：handoff-schema ← handoff ← project-memory ← state-graph |
+| 兼容层 | ✅ 旧 API（Handoff 四字段 / setFact 等）保留为 deprecated 转发 |
+
+---
+
+## 测试与验证
+
+- **62 测试文件 / 388 测试全绿**（Vitest），覆盖：handoff（parse/merge/build/inject）、门禁（环境/输出）、引擎（路由/循环/熔断/恢复/事件）、角色（加载/并发）、可视化（REST/SSE/看板）、生命周期（热重载）。
+- **`pnpm typecheck`**：0 error（strict + NodeNext ESM + verbatimModuleSyntax）。
+- **`pnpm build`**：通过（host tsc + client esbuild IIFE，client bundle ~112KB）。
+- **一键复验**：`pwsh -File test-env/verify-mvp5.ps1`（typecheck + build + 全量单测）。
+- **反例验收（planB 10.4）**：前端代码 0 硬编码 provider id / 工具名；平台新代码 0 领域术语；handoff.ts 不导入 project-memory（编译错误验证）。
+
+---
+
+## 开发与部署
+
+### 本地验证
+
+```powershell
+cd 3pluginCode
+pnpm install
+pnpm typecheck   # 0 error
+pnpm build       # lib/index.js + lib/client.js
+pnpm vitest run  # 388 tests
+```
+
+### 打包发布
+
+```powershell
+pnpm pack --pack-destination ./dist   # 产出 dist/dsh-agent-weave-0.2.9.tgz
+```
+
+### 测试环境重部署（3081）
+
+```powershell
+# 1. 删 profile 里已装的包
+cd D:\dsharness\agentDev\softwareEngnieering\3pluginCode\test-env\dsh-home\profiles\weave-test
+Remove-Item -Recurse -Force ".\node_modules\dsh-agent-weave" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force ".\node_modules\.pnpm\dsh-agent-weave*" -ErrorAction SilentlyContinue
+
+# 2. 清 pnpm store 里所有 dsh-agent-weave 相关
+pnpm store prune
+
+# 3. 卸载 profile 里声明的依赖
+pnpm remove dsh-agent-weave
+
+# 4. 重新安装 0.2.9 并启动
+node $dshBin plugin --profile weave-test add "D:\dsharness\agentDev\softwareEngnieering\3pluginCode\dist\dsh-agent-weave-0.2.9.tgz"
+pnpm add "file:D:/dsharness/agentDev/softwareEngnieering/3pluginCode/dist/dsh-agent-weave-0.2.9.tgz"
+node $dshBin --profile weave-test --port 3081
+```
+
+> 真实 E2E（真实 LLM）由用户在 3081 执行；开发环境禁止高强度调用测试环境大模型。
 
 ---
 
@@ -293,83 +330,37 @@ P1.1.7 生命周期验证    P1.1.4 日志基础设施   P1.1.5 角色 Schema
 
 ### 官方库（DeepSeek Harness 官方）
 
-| 库名 | 用途 | 来源标注 | 仓库/链接 |
-|---|---|---|---|
-| `@deepseek-ai/dsh-subagent` | 持久化子代理服务，提供 `startContinuable` / `sendMessage` / `interrupt` 等 | **官方稳定版** | [deepseek-harness/packages/subagent](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/subagent/subagent) |
-| `@deepseek-ai/dsh-tool-subagent` | 将 subagent 能力暴露为模型可调用工具 | **官方稳定版** | 同上 |
-| `@deepseek-ai/dsh-agent-budget` | 原生 Harness 的 Agent 树 Token 预算插件，durable session + descendant-tree scopes | **官方 npm 包**（仓库社区维护） | [vibeinging/dsh-agent-budget](https://github.com/vibeinging/dsh-agent-budget) |
-| `@deepseek-ai/dsh-goal` | 目标跟踪服务（`ctx.goals`） | **官方稳定版** | `deepseek-harness/packages/goal/` |
-| `dsh-jobs` / `dsh-jobs-local` | 后台任务注册表（`ctx.jobs`，九方法契约） | **官方稳定版** | `deepseek-harness/packages/jobs/` |
-| `@deepseek-ai/cordis` | 插件框架 | **官方** | — |
-
-> **官方实验性包（不推荐作为核心依赖）**：`@deepseek-ai/dsh-experimental-agent-team`（不支持循环工作流，API 不稳定）。
-
-### 社区库（DSH 生态插件，学习/可选）
-
-> ⚠️ 以下为社区维护插件，版本兼容性需自行验证（多数未适配 DSH 0.1.5-rc2）。**仅作设计参考，不直接依赖**。
-
-| 库名 | 学习点 | 来源标注 | 仓库/链接 |
-|---|---|---|---|
-| `dsh-state-graph` | StateGraph 引擎：条件边、迭代熔断、子图嵌套、审批门 | 社区（zerosloney） | [zerosloney/dsh-state-graph](https://github.com/zerosloney/dsh-state-graph) |
-| `dsh-node-flow` | 可视化画布：拖拽节点、端口连线、If/Switch/Loop/While | 社区（CodermanYHZ） | [CodermanYHZ/dsh-node-flow](https://github.com/CodermanYHZ/dsh-node-flow) |
-| `dsh-agent-team-gui` | Run Center：计划/成员输出/重试/Token 一界面 | 社区（toolclub） | [toolclub/dsh-agent-team-gui](https://github.com/toolclub/dsh-agent-team-gui) |
-| `dsh-swarm` | 常驻生命周期、`art://` 工件引用、任务账本看门狗 | 社区（wanghj040530） | [wanghj040530/dsh-swarm](https://github.com/wanghj040530/dsh-swarm) |
-| `dsh-expert-orchestrator` | Taskboard + 消息总线 + PM-first 规划 | 社区（mario841859784） | [mario841859784/dsh-expert-orchestrator](https://github.com/mario841859784/dsh-expert-orchestrator) |
-| `dsh-session-pruner` | Session 生命周期管理（自动归档 one-shot / continuable） | 社区（mrzhangkris） | [mrzhangkris/dsh-session-pruner](https://github.com/mrzhangkris/dsh-session-pruner) |
-| `dsh-turn-budget` | fail-closed per-turn 资源治理（`maxToolCallsPerTurn`） | 社区（Nunchakus888） | [Nunchakus888/dsh-turn-budget](https://github.com/Nunchakus888/dsh-turn-budget) |
-| `dsh-discipline-guard` | 四道硬闸门（循环熔断、成本熔断、路由监视、计划门） | 社区（haozheou） | [haozheou/dsh-discipline-guard](https://github.com/haozheou/dsh-discipline-guard) |
-| `dsh-plugin-product-subagents` | 基于角色的子代理 Provider，`maxConcurrentChildren` 限制 | 社区（shaokeyibb） | [shaokeyibb/dsh-plugin-product-subagents](https://github.com/shaokeyibb/dsh-plugin-product-subagents) |
-| `dsh-token-stats` | Token 消耗统计面板（柱状图/饼图/热力图） | 社区（H1a3x） | [H1a3x/dsh-token-stats](https://github.com/H1a3x/dsh-token-stats) |
-| `dsh-agent-graph` | 图编排 + 结构化交接 + bounded rework + layered ledger | 社区（wrc093） | [wrc093/dsh-agent-graph](https://github.com/wrc093/dsh-agent-graph) |
-
-### 外部开源参考（非 DSH 插件）
-
-| 项目 | 核心价值 | 来源标注 | 仓库/链接 |
-|---|---|---|---|
-| **LangGraph** | StateGraph、checkpoint、conditional edges、循环工作流 | 外部开源（LangChain） | [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph) |
-| **DeerFlow** | 字节跳动 SuperAgent 框架，子代理独立 checkpointer + 并行编排 | 外部开源（字节跳动） | [bytedance/deer-flow](https://github.com/bytedance/deer-flow) |
-| **MetaGPT** | 固定角色 SOP 流水线 + 结构化文档交接防失真 | 外部开源 | [geekan/MetaGPT](https://github.com/geekan/MetaGPT) |
-| **ChatDev** | ChatChain 双人对话链 + 角色专属阶段循环 | 外部开源 | [OpenBMB/ChatDev](https://github.com/OpenBMB/ChatDev) |
-| **AutoGen Studio** | 拖拽式 Team Builder + Playground 实时消息流可视化 | 外部开源（Microsoft） | [microsoft/autogen](https://github.com/microsoft/autogen) |
-| **Orchid** | YAML 驱动 Agent 定义 + 滑动窗口历史摘要压缩 | 外部开源 | [orchid-ai](https://pypi.org/project/orchid-ai/) |
-| **PACT** | 并发审计协议：文件观察优先、GREEN/YELLOW/RED 信号 | 外部参考（设计模式） | 见文档描述 |
-| **AgentGit / CVC** | 工作流版本控制与回滚 | 外部开源 | [AgentGit](https://browse-export.arxiv.org) / [CVC](https://pypi.org/project/cvc/) |
-
----
-
-## 开发路线图（MVP）
-
-| MVP | 名称 | 关键环节 | 门禁 | 状态 |
-|---|---|---|---|---|
-| 0 | 角色资产 | R1-R10 skill 已完成 | 已过 | ✅ |
-| **1** | **单链脚本验证** | **角色编译 + 串行编排 R1→R8，验证角色协作** | **多角色顺序跑通真实小任务 + 记忆隔离 + toolFilter + chat 可见节点** | **✅ 已完成**（四项门禁全过） |
-| 2 | **自研 StateGraph 引擎** | 图 DSL + checkpoint 契约 + 条件边 + 循环回退 + 熔断 + BDD/mock 测试 | 循环 DSL 跑通 + 循环退出/熔断双生效 + 路由确定性测试 | ✅ 已完成 |
-| 3 | **状态+交接+消息+恢复** | 任务树持久化 + handoff + 消息总线 + checkpoint 恢复 + 分账 + 生命周期 + Token 熔断 + 观察者 L2 | 中断可恢复、交接可追溯、按角色分账、跨角色对话可达 | ✅ 已完成 |
-| 4 | **只读激活看板** | **Web 实时看板**（D1 按钮 + D3 主区）+ 图染色 + 审批 + 观察者 + 消息流（零 token）+ 断点恢复 | 全程图节点实时染色 + 子代理活动流 + 暂停/恢复/终止/恢复点 | **✅ 已完成**（问题 1-5 已修复） |
-| 5 | 角色导入+画布连边 | YAML 导入解析器 + 拖拽连边 → DSL + 端口规则 + 沙箱隔离 | 零代码搭自定义团队跑通 | ⏳ 即将动工 |
-| 6 | 打磨 | 恢复加固 / 超时降级 / 记忆压缩 / 对抗评审 / 观察者 L3 | 全套门禁 | ⏳ |
-
-**质变点 = MVP-2（自研 StateGraph）**：从"一堆 skill"到"编排工具"的跨越发生在这里。
-**体验质变点 = MVP-4（Web 实时看板）**：从"跑完看结果"到"实时可看可控"。
-
-**观察者机制集成**：MVP-2 实现 L1 轻量检查（零 Token）；MVP-3 实现 L2 静默观察（低 Token）；MVP-4 展示观察者信号；MVP-6 按需实现 L3 深度审查。
-
----
-
-## 风险与缓解
-
-| 风险 | 缓解 |
+| 库名 | 用途 |
 |---|---|
-| **StateGraph 自研复杂度** | 参考 `dsh-state-graph` 逻辑（不抄码）；MVP-2 只做 seq+cond+loop |
-| **冷恢复延迟** | 生命周期 resident/on-demand/hybrid + 活跃窗口 + SLA >10s 降级人工 |
-| **循环失控 / 成本爆炸** | 迭代熔断 (25) + 硬 Token 预算 + 人工审批 + `dsh-discipline-guard` 兜底 |
-| **Cordis 热重载资源泄漏** | 非 Cordis 管理资源一律 `ctx.effect()` 包装；热重载测试入门禁 |
-| **并行/BFS 广度爆炸** | L3 `max_concurrent_children` + `dsh-turn-budget` 兜底；全局上限需引擎层自建 |
-| **subagent Messages 协议历史 notice 毒化** | 不依赖 subagent settlement notice 恢复；升级前归档 |
-| **观察者干扰工作 Agent** | 80%+ 观察为静默文件读取；fail-open；观察者故障不阻塞主流程 |
-| **观察者 Token 失控** | 分级触发 + 观察者独立 Token 预算；超预算降级为 L1 |
-| **图版本化缺失** | 图 DSL 增加 `graphVersion`；参考 AgentGit / CVC 的版本控制语义 |
-| **Windows 环境特有限制** | 全局安装 `dsh`；避免 `npx`/`pnpm dlx`；路径逃逸防护；scoped Cordis |
+| `@deepseek-ai/dsh-subagent` | 持久化子代理（startContinuable / sendMessage / interrupt） |
+| `@deepseek-ai/dsh-tools` | 工具注册（defineTool） |
+| `@deepseek-ai/dsh-agent` | Agent 最小形态（父代理上下文） |
+| `@deepseek-ai/cordis` | 插件框架（scoped，无双 Cordis 分裂） |
+
+### 外部开源参考（设计借鉴，非直接依赖）
+
+| 项目 | 借鉴点 |
+|---|---|
+| LangGraph | StateGraph、checkpoint、conditional edges、循环工作流 |
+| dsh-agent-graph | 结构化交接（summary/artifacts/openIssues）注入直接下游；分层全局账本 |
+| MetaGPT | 固定角色 SOP 流水线 + 结构化文档交接防失真 |
+| dsh-node-flow / AutoGen Studio | 拖拽式画布、节点属性面板、导入导出 |
+| PACT | 并发审计协议：文件观察优先、GREEN/YELLOW/RED 信号 |
+
+---
+
+## 遗留与真实环境项
+
+| 项 | 说明 | 归属 |
+|---|---|---|
+| **真实 LLM E2E** | 一句话 → 面板 → 开始 → 交接单累积 → HandoffViewer（用户 3081 实测） | 用户 |
+| **角色编辑器实测** | 新建角色落盘 → 角色库可见 → 画布可拖入 | 用户 |
+| **交接单注入实测** | 下游 prompt 含【上游交接单】；verified 不重复探测；unmet 阻塞暂停 | 用户 |
+| **恢复实测** | 暂停 → 恢复后 projectMemorySnapshot 重建，交接单不丢 | 用户 |
+| **PR-5.6 自动激活** | shell.overlay 常驻已实现；宿主自动打开看板待真实环境确认 | 待探测 |
+| **mvp1-chain.ts** | ⚠️ **MVP-1 遗留演示链**（ETF/腾讯 API 演示内容）；仅 `weave_run_chain` 工具调用，不影响本体引擎/交接单/看板；B1-B7 范围外未重构 | 遗留 |
+| **观察者 L3 / 记忆压缩 / 并行边** | MVP-6 内容，未开始 | MVP-6 |
+| **版本号** | 代码层 0.2.9 未 bump（MVP-5B 未涉及发布版本号决策） | 待定 |
 
 ---
 
@@ -379,6 +370,6 @@ P1.1.7 生命周期验证    P1.1.4 日志基础设施   P1.1.5 角色 Schema
 
 ---
 
-> **文档版本**：v3（2026-09-24）｜适配 **DSH 0.1.5-rc2 + Windows 11 + Node 24**
-> **当前阶段**：MVP-4 已完成（Web 实时看板 + 问题 1-5 修复），MVP-5 即将动工
-> **权威源**：`docs/04-MVP与设计契约.md`、`docs/02-整体设计.md`、`docs/03-能力探测与复用结论.md`、`docs/00-开发计划.md`
+> **文档版本**：v4（2026-09-26）｜适配 **DSH 0.1.5-rc.2 + Windows 11 + Node 22**
+> **当前阶段**：MVP-5B 已完成（结构化交接单），MVP-6 打磨+生态待动工
+> **权威源**：`docs/04-MVP与设计契约.md`、`docs/02-整体设计.md`、`docs/00-开发计划.md`、`docs/001-开发契约.md`、`docs/MVP-5B/MVP-5planB.md`
