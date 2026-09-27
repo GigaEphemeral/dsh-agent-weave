@@ -53,6 +53,21 @@ export function getCurrentNodeCtx(): { artifactsRoot: string | undefined; graphI
   return currentNodeCtx ?? { artifactsRoot: undefined, graphId: '', nodeId: '' }
 }
 
+/** ★ 问题2：全局 graphId → (nodeId → childId) 映射（节点级控制：interrupt/sendMessage）。 */
+const graphNodeChildren = new Map<string, Map<string, string>>()
+export function getNodeChildId(graphId: string, nodeId: string): string | undefined {
+  return graphNodeChildren.get(graphId)?.get(nodeId)
+}
+export function clearGraphNodeChildren(graphId: string): void {
+  graphNodeChildren.delete(graphId)
+}
+
+/** ★ 问题2：全局 graphId → parentAgent（interrupt 的 authority）。 */
+const graphParentAgents = new Map<string, unknown>()
+export function getParentAgent(graphId: string): unknown {
+  return graphParentAgents.get(graphId)
+}
+
 /** 已注册 provider 名列表（安全读取，失败返回空——问题 2 定位日志用）。 */
 function safeProviderList(ctx: Context): string[] {
   try {
@@ -337,9 +352,14 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
 【行为约束】
 每次调用工具前，先输出一行 "[动作] 正在 <做什么>（工具: <toolName>）"。`
+        // ★ 问题1 修法：user_input 只给 entry 节点（无 seq 上游）；下游节点不注入原始需求（防越权）
+        const hasSeqUpstream = edges.some((e) => e.to === name && e.type === 'seq')
+        const userInputForPrompt = hasSeqUpstream
+          ? '（本节点是下游节点，用户原始需求已在上游产物中体现。**你只做自己职责范围内的产出**，不要越权生产其他角色的产物。）'
+          : String((state.user_input as string | undefined) ?? '')
         const prompt = (options.promptTemplate ?? defaultTemplate)
           .replaceAll('{{provider}}', options.provider)
-          .replaceAll('{{user_input}}', String((state.user_input as string | undefined) ?? ''))
+          .replaceAll('{{user_input}}', userInputForPrompt)   // ★ 改这行：entry 才注入完整需求
           .replaceAll('{{upstream}}', upstreamSummary)
           .replaceAll('{{artifactName}}', options.artifactName ?? `${name}.md`)
         // ★ v2.0：Prompt 边界块注入（职责/禁止/产物要求/handoff 模板/探测协作）
@@ -382,6 +402,12 @@ export function createStateGraph<T extends Record<string, unknown>>(
               signal: signal ?? new AbortController().signal,
             })
             childIdByNode.set(name, started.childId)
+            // ★ 问题2：登记到全局映射（节点级控制用）
+            {
+              let m = graphNodeChildren.get(nodeCtx.graphId)
+              if (!m) { m = new Map(); graphNodeChildren.set(nodeCtx.graphId, m) }
+              m.set(name, started.childId)
+            }
             activeChildId = started.childId
             // 问题 2 定位日志③：continuable 创建成功（childId 持久化）
             logger.info('weave-addsubagent', 'startContinuable 返回', {
@@ -514,6 +540,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
       // ★ 问题一步骤0：graphId 从 options 读（外部指定统一值），缺省才自己生成
       const graphId = options.graphId ?? `graph-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      // ★ 问题2：登记 parentAgent（节点级 interrupt 的 authority）
+      graphParentAgents.set(graphId, options.agent)
       const trajectory: TrajectoryEvent[] = []
       let state = initialState
       // ★ 问题五：startFrom 覆盖入口（恢复场景从暂停节点续跑）
@@ -899,6 +927,13 @@ export function createStateGraph<T extends Record<string, unknown>>(
               timestamp: Date.now(),
               data: { reason: 'user-pause', childId: error.childId, resumeFrom: current },
             })
+            // ★ 问题2：暂停通知主 agent（防自动重跑）
+            await notifyMainAgentPaused(ctx, options.agent, {
+              graphId,
+              node: current,
+              reason: 'user-pause',
+              ...(artifactsRoot !== undefined ? { artifactsRoot } : {}),
+            })
             // 不 clearGraphControl（等 resume 重置信号）
             return {
               graphId, success: true, finalState: state, trajectory, iterations: iteration,
@@ -910,6 +945,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
             logger.info('weave', '图终止（用户停止）', { graphId, node: current })
             emit({ type: 'graph/end', graphId, node: current, timestamp: Date.now(), data: { stopped: true } })
             clearGraphControl(graphId)
+            clearGraphNodeChildren(graphId)
+            graphParentAgents.delete(graphId)
             return {
               graphId, success: true, finalState: state, trajectory, iterations: iteration,
               data: { stopped: true },
@@ -953,16 +990,13 @@ export function createStateGraph<T extends Record<string, unknown>>(
                 pauseReason: classification.reason,
                 snapshotPath: `pauses/${graphId}.json`,
               })
-              // 通知主 agent（approval 服务存在时；缺省记日志）
-              const approvalService = ctx.get('approval') as ApprovalServiceLike | undefined
-              if (approvalService && options.agent) {
-                void approvalService.request({
-                  agent: options.agent,
-                  toolName: 'weave.graph.paused',
-                  reason: `图在节点 ${current} 暂停：${classification.details.suggestedAction ?? '检查后恢复'}（weave_graph_resume）`,
-                  ...(options.signal !== undefined ? { signal: options.signal } : {}),
-                }).catch(() => {})
-              }
+              // ★ 问题2：暂停通知主 agent（防自动重跑）
+              await notifyMainAgentPaused(ctx, options.agent, {
+                graphId,
+                node: current,
+                reason: classification.reason,
+                ...(artifactsRoot !== undefined ? { artifactsRoot } : {}),
+              })
             } catch (snapshotErr) {
               logger.error('weave', '暂停快照落盘失败，回退 node-error', snapshotErr instanceof Error ? snapshotErr : new Error(String(snapshotErr)), { graphId })
             }
@@ -1001,7 +1035,49 @@ export function createStateGraph<T extends Record<string, unknown>>(
       emit({ type: 'graph/end', graphId, timestamp: Date.now() })
       // 问题四修复3：运行结束释放内存控制状态
       clearGraphControl(graphId)
+      // ★ 问题2：运行结束清理节点级控制映射
+      clearGraphNodeChildren(graphId)
+      graphParentAgents.delete(graphId)
       return { graphId, success: true, finalState: state, trajectory, iterations: iteration }
     },
+  }
+}
+
+/** ★ 问题2：图暂停时通知主 agent（防它自动重跑）。双通道：approval 卡 + PAUSED 文件 fallback。 */
+async function notifyMainAgentPaused(
+  ctx: Context,
+  agent: unknown,
+  info: { graphId: string; node: string; reason: string; artifactsRoot?: string },
+): Promise<void> {
+  const reasonText =
+    `⚠ 图 ${info.graphId} 已在节点 ${info.node} 暂停（${info.reason}）。\n` +
+    `图执行循环已停止，不会再创建下一步子代理。\n\n` +
+    `【主 agent 必读】\n` +
+    `1. 向用户报告暂停位置与原因，等待用户明确指示。\n` +
+    `2. 禁止自动调用 weave_run_graph 重跑整个图（重复消耗 token）。\n` +
+    `3. 用户指示继续时，调用 weave_graph_resume graph_id=${info.graphId}。\n` +
+    `4. 用户指示放弃时，无需进一步操作。`
+
+  const approvalService = ctx.get('approval') as ApprovalServiceLike | undefined
+  if (approvalService && agent) {
+    try {
+      await approvalService.request({ agent, toolName: 'weave.graph.paused', reason: reasonText })
+      logger.info('weave', '已通过 approval 通知主 agent', { graphId: info.graphId })
+      return
+    } catch (err) {
+      logger.warn('weave', 'approval 通知失败，走 fallback', {
+        graphId: info.graphId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  if (info.artifactsRoot) {
+    try {
+      writeFileSync(join(info.artifactsRoot, 'PAUSED'), reasonText, 'utf8')
+      logger.info('weave', '已写 PAUSED 文件（fallback）', { graphId: info.graphId })
+    } catch (err) {
+      logger.warn('weave', '写 PAUSED 失败', { graphId: info.graphId, error: String(err) })
+    }
   }
 }

@@ -26,6 +26,15 @@ export const PROBE_COLLAB_RULES = `【探测协作规范】
 3. 若发现上游已探测过的对象（见"已探测"清单），不要再探测。
 4. 最终产物末尾必须包含本次所有 reusable=true 的探测。`
 
+/** ★ 问题6：异步 subagent 工作方式（所有角色适用）。 */
+export const ASYNC_SUBAGENT_RULES = `【工作方式（所有角色适用）】
+你是异步 subagent，没有与用户对话的通道。
+- ❌ 不要"停下来等用户回答"——没有任何机制把回答送回来
+- ❌ 不要输出"请用户确认 xxx 后再继续"——图不会因此暂停
+- ✅ 遇到不明确：先按合理假设继续（标 ⚠️ + 证据等级）
+- ✅ 把本该问用户的问题写入产物的"待确认问题清单"章节
+- ✅ 主 agent 会把产物呈现给用户，用户回答后可决定是否重跑/resume`
+
 /** 从 capability 推导默认禁止（无 role_boundary 时兜底）。 */
 function deriveDefaultForbidden(role: RoleDefinition | undefined): string[] {
   const out: string[] = []
@@ -68,6 +77,8 @@ export function buildRoleBoundaryBlock(role: RoleDefinition | undefined, provide
 
   lines.push(HANDOFF_BLOCK_TEMPLATE)
   lines.push(PROBE_COLLAB_RULES)
+  // ★ 问题6：异步 subagent 工作方式（通用约束）
+  lines.push(ASYNC_SUBAGENT_RULES)
 
   return lines.join('\n')
 }

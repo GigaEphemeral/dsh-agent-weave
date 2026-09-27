@@ -71,7 +71,7 @@ export function registerVisualRoutes(
   void ctx
   const disposers: Array<() => void> = []
 
-  const handle = (rest: string, req: Req, res: Res): void => {
+  const handle = async (rest: string, req: Req, res: Res): Promise<void> => {
     const method = req.method ?? 'GET'
     // ★ v2 问题3 修法1：每个请求一行 log
     logger.info('weave-routes', `${method} ${rest}`, { path: rest })
@@ -193,10 +193,57 @@ export function registerVisualRoutes(
 
     // POST /graph/:graphId/pause|resume|stop
     // ★ v2 问题1 修法2：只走内存控制（触发 abort）；文件层仅 resume 清理 PAUSE
-    if (tail.length === 1 && ['pause', 'resume', 'stop'].includes(tail[0] ?? '')) {
+    // ★ 节点级控制 /graph/:graphId/node/:nodeId/pause|resume（问题2）
+    if (tail[0] === 'node' && tail.length === 3 && ['pause', 'resume'].includes(tail[2] ?? '')) {
+      if (method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
+      const nodeId = tail[1] ?? ''
+      const action = tail[2] as 'pause' | 'resume'
+
+      const { getNodeChildId, getParentAgent } = await import('../../l2-engine/state-graph.js')
+      const childId = getNodeChildId(graphId, nodeId)
+      const parent = getParentAgent(graphId)
+
+      logger.info('weave-routes', `节点控制: ${action}`, { graphId, nodeId, childId })
+
+      if (!childId) { json(res, 404, { error: `节点 ${nodeId} 无活跃 childId` }); return }
+      if (!parent) { json(res, 500, { error: '父 agent 不可用' }); return }
+
+      const subagents = (ctx as unknown as { subagents: {
+        interrupt?: (targetSessionId: string, authority: unknown) => void
+        sendMessage?: (sender: unknown, targetId: string, content: unknown, opts: unknown) => Promise<unknown>
+      } }).subagents
+
+      if (action === 'pause') {
+        if (typeof subagents.interrupt !== 'function') { json(res, 500, { error: 'interrupt 不可用' }); return }
+        try {
+          subagents.interrupt(childId, { kind: 'ancestor', agent: parent })
+          logger.info('weave-routes', `已 interrupt childId=${childId}`, { graphId, nodeId })
+          json(res, 200, { ok: true, action, nodeId, childId })
+        } catch (err) {
+          logger.error('weave-routes', 'interrupt 失败', err instanceof Error ? err : new Error(String(err)), { graphId, nodeId })
+          json(res, 500, { error: 'interrupt 调用失败' })
+        }
+        return
+      }
+
+      // resume
+      if (typeof subagents.sendMessage !== 'function') { json(res, 500, { error: 'sendMessage 不可用' }); return }
+      try {
+        await subagents.sendMessage(parent, childId, [{ type: 'text', text: '请继续完成你的任务。' }], {})
+        logger.info('weave-routes', `已 sendMessage 到 childId=${childId}`, { graphId, nodeId })
+        json(res, 200, { ok: true, action, nodeId, childId })
+      } catch (err) {
+        logger.error('weave-routes', 'sendMessage 失败', err instanceof Error ? err : new Error(String(err)), { graphId, nodeId })
+        json(res, 500, { error: 'sendMessage 调用失败' })
+      }
+      return
+    }
+
+    // ★ 图级 pause/resume（问题2：去掉 stop）
+    if (tail.length === 1 && ['pause', 'resume'].includes(tail[0] ?? '')) {
       if (method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
       const root = entry?.artifactsRoot ?? resolveArtifactsRoot({})
-      const action = tail[0] as 'pause' | 'resume' | 'stop'
+      const action = tail[0] as 'pause' | 'resume'
       controlActiveGraph(action, graphId)
       // 文件层保留（chain-runner 兼容）：resume 时清理 PAUSE 文件
       if (action === 'resume') {
@@ -214,13 +261,13 @@ export function registerVisualRoutes(
     webServer.register({
       kind: 'prefix',
       path: '/api/weave',
-      handler: (req, res) => {
+      handler: async (req, res) => {
         const r = req as Req
         const rs = res as Res
         const url = r.url ?? ''
         const rest = url.split('?')[0]?.slice('/api/weave'.length) ?? ''
         // SSE 需要 res.write 存在
-        handle(rest, r, rs)
+        await handle(rest, r, rs)
       },
     }),
   )

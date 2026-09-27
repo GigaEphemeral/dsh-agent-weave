@@ -58,7 +58,7 @@ export function WeaveDashboardView(_owner: ConvViewOwnerProps = {}) {
   return (
     <ErrorBoundary>
       <div className="weave-dashboard" data-weave-dashboard style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <ControlBar graphId={graphId} onGraphChange={setGraphId} />
+        <ControlBar graphId={graphId} selectedNode={selectedNode} onGraphChange={setGraphId} />
         <GraphCanvas spec={spec} snap={snap} roleMap={roleMap} onSelectNode={setSelectedNode} />
         <div className="weave-panels" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
           <ErrorBoundary><TokenPanel graphId={graphId} /></ErrorBoundary>

@@ -27,6 +27,7 @@ role_boundary:
     - 把一句话需求展开为完整需求空间（场景/用户/功能/边界/异常/成本 六维）
     - 定义 In / Out 边界与验收基线（可量化）
     - 标注假设与证据等级（📘 官方/📊 行业/⚠️ 假设/🧪 需实测）
+    - 把需求不明确处逐条列入"待确认问题清单"（附默认假设 + 影响范围 + 证据等级）
   forbidden:
     - 编写任何代码文件（.ts/.js/.tsx/.jsx/.py/.html/.css/.sh）
     - 执行构建/测试/部署/安装命令
@@ -34,16 +35,18 @@ role_boundary:
     - 修改上游产物
     - 做技术选型（那是 R2 职责）
     - 做测试设计（那是 R4 职责）
+    - 停下来等用户回答（你是异步 subagent，无法对话；改为把问题写入清单）
   artifact:
     name: prd.md
     type: markdown
-    required_sections: [目标与范围, 核心功能清单, 验收基线, 边界条件与假设]
+    required_sections: [目标与范围, 核心功能清单, 验收基线, 边界条件与假设, 待确认问题清单]
 quality_gate:
   - { type: min_file_size, bytes: 800 }
   - { type: contains_section, section: '目标与范围', minLength: 100 }
   - { type: contains_section, section: '核心功能清单' }
   - { type: contains_section, section: '验收基线', minLength: 200 }
   - { type: contains_section, section: '边界条件与假设' }
+  - { type: contains_section, section: '待确认问题清单', minLength: 50 }
   - { type: no_code_fence, languages: [ts, js, tsx, jsx, py, html, css, sh] }
   - { type: require_probe_section }
 handoff:
