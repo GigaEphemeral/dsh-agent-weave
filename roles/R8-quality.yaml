@@ -9,8 +9,6 @@ traits:
 capabilities:
   - 代码审核
   - 门禁判定
-tools:
-  - read
 model:
   provider: vol186coding
   model: deepseek-v4-flash
@@ -21,12 +19,27 @@ capability:
   allow_delegation: false
   max_depth: 1
   allowed_children: []
-  allow_shell: true
+  allow_shell: false
   allow_write: true
+role_boundary:
+  responsibilities:
+    - 按 P0/P1/P2 分级列出问题
+    - 给出门禁判定（通过 / 不通过 + 理由）
+    - 结论可复核（附证据引用）
+  forbidden:
+    - 修改代码
+    - 执行修复
+    - 与上游重复的探测（除非证据不足需复核）
+  artifact:
+    name: review.md
+    type: markdown
+    required_sections: [问题清单, 门禁判定, 结论]
 quality_gate:
-  - P0/P1/P2 分级
-  - 结论可复核
-token_budget: 2000
+  - { type: min_file_size, bytes: 600 }
+  - { type: contains_section, section: '问题清单' }
+  - { type: contains_section, section: '门禁判定' }
+  - { type: contains_section, section: '结论' }
+  - { type: require_probe_section }
 handoff:
   upstream:
     - R7-tester

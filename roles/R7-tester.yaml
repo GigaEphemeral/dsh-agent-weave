@@ -9,8 +9,6 @@ traits:
 capabilities:
   - 测试执行
   - 回归验证
-tools:
-  - read
 model:
   provider: vol186coding
   model: deepseek-v4-flash
@@ -21,12 +19,26 @@ capability:
   allow_delegation: false
   max_depth: 1
   allowed_children: []
-  allow_shell: true
+  allow_shell: false
   allow_write: true
+role_boundary:
+  responsibilities:
+    - 按测试要点执行验证（正常/边界/异常）
+    - 对比 PRD 验收基线
+    - 失败项附复现步骤与证据
+  forbidden:
+    - 修改代码（发现问题→记录，不修复）
+    - 执行与测试无关的命令
+    - 修改需求/设计
+  artifact:
+    name: report.md
+    type: markdown
+    required_sections: [测试用例清单, 预期结果, 验收基线对照, 结论]
 quality_gate:
-  - 回归基线对比
-  - 失败附复现
-token_budget: 2000
+  - { type: min_file_size, bytes: 800 }
+  - { type: contains_section, section: '测试用例', minLength: 150 }
+  - { type: contains_section, section: '结论' }
+  - { type: require_probe_section }
 handoff:
   upstream:
     - R6-developer

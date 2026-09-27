@@ -7,15 +7,8 @@ traits:
   - 严谨
   - 高效
 capabilities:
-  - TypeScript 实现
+  - 代码实现
   - 单测编写
-tools:
-  - read
-  - glob
-  - grep
-  - write
-  - edit
-  - pwsh
 model:
   provider: vol186coding
   model: deepseek-v4-flash
@@ -28,12 +21,25 @@ capability:
   allowed_children: []
   allow_shell: true
   allow_write: true
+role_boundary:
+  responsibilities:
+    - 按设计产出可运行的代码文件（一个或多个）
+    - 编写对应单测（如设计有要求）
+    - 记录环境/依赖/接口探测过程
+  forbidden:
+    - 修改需求/架构/设计（如有疑义，在产物"遗留问题"章节提出）
+    - 探测与实现无关的环境（列无关目录、检查无关工具链）
+    - 反复勘察 node/npm/tsc 环境（若上游未明确要求构建，跳过）
+  artifact:
+    name: develop.md
+    type: code
+    required_sections: [实现要点, 文件清单, 探测记录]
 quality_gate:
-  - tsc 0 error
-  - 单测全绿
-  - 至少 1 个代码文件落地
-  - develop.md 非空
-token_budget: 2500
+  - { type: min_artifact_count, n: 1 }
+  - { type: min_file_size, bytes: 300 }
+  - { type: contains_section, section: '实现要点', minLength: 50 }
+  - { type: contains_section, section: '文件清单' }
+  - { type: require_probe_section }
 handoff:
   upstream:
     - R4-designer

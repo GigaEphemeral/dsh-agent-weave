@@ -9,8 +9,6 @@ traits:
 capabilities:
   - 测试方案设计
   - 接口细化
-tools:
-  - read
 model:
   provider: vol186coding
   model: deepseek-v4-flash
@@ -21,12 +19,28 @@ capability:
   allow_delegation: false
   max_depth: 1
   allowed_children: []
-  allow_shell: true
+  allow_shell: false
   allow_write: true
+role_boundary:
+  responsibilities:
+    - 细化关键接口/函数签名（伪代码级别）
+    - 设计测试方案（正常/边界/异常三层）
+    - 验收对照（对齐 PRD 验收基线）
+  forbidden:
+    - 编写完整代码实现
+    - 执行构建/测试命令
+    - 修改架构决策（变更属 R2）
+    - 修改需求
+  artifact:
+    name: design.md
+    type: markdown
+    required_sections: [实现要点, 接口细化, 测试要点, 验收对照]
 quality_gate:
-  - 测试分层完整
-  - 边界输入覆盖
-token_budget: 2000
+  - { type: min_file_size, bytes: 1000 }
+  - { type: contains_section, section: '实现要点' }
+  - { type: contains_section, section: '测试要点', minLength: 150 }
+  - { type: contains_section, section: '验收对照' }
+  - { type: require_probe_section }
 handoff:
   upstream:
     - R2-architect
