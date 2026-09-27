@@ -84,7 +84,8 @@ export function compileRoleProfile(role: RoleDefinition, options: CompileOptions
   return {
     name: role.id,
     persona,
-    toolFilter: [...role.tools],
+    // ★ v2.0：tools 可选（缺省空数组 = 不做工具层控制，靠 SKILL.md 提醒）
+    toolFilter: role.tools ? [...role.tools] : [],
     agentOptions: {
       provider: role.model.provider,
       model: role.model.model,
@@ -98,13 +99,15 @@ export function compileRoleProfile(role: RoleDefinition, options: CompileOptions
       traits: [...role.traits],
       capabilities: [...role.capabilities],
       quality_gate: [...role.quality_gate],
-      token_budget: role.token_budget,
+      // ★ v2.0：token_budget 仅记录（可选）
+      ...(role.token_budget !== undefined ? { token_budget: role.token_budget } : {}),
       lifecycle: role.lifecycle,
       handoff: {
         upstream: [...role.handoff.upstream],
         downstream: [...role.handoff.downstream],
         edge_type: role.handoff.edge_type,
       },
+      ...(role.role_boundary !== undefined ? { role_boundary: role.role_boundary } : {}),
     },
   }
 }
@@ -153,11 +156,12 @@ export function compileRoleToProvider(
     agentRouteDefaults: profile.agentOptions,
     async start(request: ResolvedSubagentStartRequest): Promise<SubagentRun> {
       // 注入角色字段到请求（角色字段优先于调用方默认）
+      const sanitized = sanitizeTools(profile.toolFilter, profile.capability.allow_delegation)
       const injected: ResolvedSubagentStartRequest = {
         ...request,
         persona: profile.persona,
-        // ★ 问题三 C1：剥离 spawn 类工具（allow_delegation=false 时）
-        toolFilter: { allow: sanitizeTools(profile.toolFilter, profile.capability.allow_delegation) },
+        // ★ v2.0：只有非空 toolFilter 才注入（空 = 不做工具层控制，靠 SKILL.md 提醒）
+        ...(sanitized.length > 0 ? { toolFilter: { allow: sanitized } } : {}),
         agentOptions: {
           provider: profile.agentOptions.provider,
           model: profile.agentOptions.model,
@@ -255,5 +259,7 @@ export function describeRoleProfile(profile: RoleProfile): Record<string, unknow
     provider: profile.agentOptions.provider,
     model: profile.agentOptions.model,
     memory_scope: profile.inheritsParentContext ? 'shared' : 'private',
+    // ★ v2.0：token_budget 只在有值时记录（0 = 无限制）
+    ...(profile.metadata.token_budget !== undefined ? { token_budget: profile.metadata.token_budget } : {}),
   }
 }

@@ -7,7 +7,7 @@
  * - 引擎接入：质量门失败 → 节点失败 → 整图停（不再空跑后续节点）
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
@@ -16,24 +16,54 @@ import { validateNodeOutput } from '../../src/l2-engine/node-validator'
 import { getGraphControl, clearGraphControl } from '../../src/l2-engine/graph-control'
 
 describe('问题四修复1：quality_gate 产物验证', () => {
+  const dir = join(process.cwd(), 'test-env', 'runs', 'gate-spec')
+
+  function writeArtifacts(files: Record<string, string>): Record<string, string> {
+    rmSync(dir, { recursive: true, force: true })
+    mkdirSync(dir, { recursive: true })
+    const map: Record<string, string> = {}
+    for (const [key, content] of Object.entries(files)) {
+      const p = join(dir, key)
+      writeFileSync(p, content, 'utf8')
+      map[key] = p
+    }
+    return map
+  }
+
   it('产物为空 → 非空门失败', () => {
     const r = validateNodeOutput({}, ['develop.md 非空'])
     expect(r.passed).toBe(false)
-    expect(r.failures[0]).toContain('产物为空')
+    expect(r.failures[0]).toContain('≥50 字节')
   })
 
   it('有产物 → 非空门通过', () => {
-    const r = validateNodeOutput({ artifacts: { dev: '/a/dev.md' } }, ['develop.md 非空'])
+    const artifacts = writeArtifacts({ 'dev.md': 'x'.repeat(100) })
+    const r = validateNodeOutput({ artifacts }, ['develop.md 非空'])
     expect(r.passed).toBe(true)
   })
 
   it('至少 N 个产物数量校验', () => {
-    expect(validateNodeOutput({ artifacts: { a: '1', b: '2' } }, ['至少 3 个代码文件落地']).passed).toBe(false)
-    expect(validateNodeOutput({ artifacts: { a: '1', b: '2', c: '3' } }, ['至少 3 个代码文件落地']).passed).toBe(true)
+    const a = writeArtifacts({ a: 'x'.repeat(10), b: 'y'.repeat(10) })
+    expect(validateNodeOutput({ artifacts: a }, ['至少 3 个代码文件落地']).passed).toBe(false)
+    const b = writeArtifacts({ a: 'x', b: 'y', c: 'z' })
+    expect(validateNodeOutput({ artifacts: b }, ['至少 3 个代码文件落地']).passed).toBe(true)
   })
 
   it('tsc/单测门不拦截（交给角色自身）', () => {
     expect(validateNodeOutput({}, ['tsc 0 error']).passed).toBe(true)
+  })
+
+  it('结构化 gate：contains_section / no_code_fence', () => {
+    const artifacts = writeArtifacts({ 'prd.md': '## 目标与范围\n内容内容内容内容\n\n```ts\nconst x = 1\n```' })
+    const r = validateNodeOutput(
+      { artifacts },
+      [
+        { type: 'contains_section', section: '目标与范围' },
+        { type: 'no_code_fence', languages: ['ts'] },
+      ],
+    )
+    expect(r.passed).toBe(false) // 有代码围栏
+    expect(r.failures[0]).toContain('代码围栏')
   })
 })
 

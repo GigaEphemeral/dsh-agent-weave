@@ -38,7 +38,9 @@ export function parseRoleYaml(raw: string, source: string): RoleDefinition {
       issues,
     )
   }
-  return result.data
+  // zod 推断输出与 exactOptionalPropertyTypes 的可选字段表示存在差异，
+  // 经 schema 校验后数据已满足 RoleDefinition 契约，做收窄断言。
+  return result.data as RoleDefinition
 }
 
 export { RoleDefinitionSchema }

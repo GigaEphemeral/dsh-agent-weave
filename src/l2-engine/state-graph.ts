@@ -175,8 +175,8 @@ export interface SubagentNodeOptions {
   artifactName?: string
   /** 节点 meta（NEW-10 currentRole 数据来源）。 */
   role?: string
-  /** 问题四：质量门（产物验证；空数组不验证）。 */
-  qualityGate?: readonly string[]
+  /** 问题四：质量门（产物验证；空数组不验证）。★ v2.0：结构化 QualityGate。 */
+  qualityGate?: readonly (string | { type: string; [k: string]: unknown })[]
   /** 问题三 D1：输入门禁（要求上游节点产物存在且非空）。 */
   inputGate?: {
     requires: string[]
@@ -417,22 +417,14 @@ export function createStateGraph<T extends Record<string, unknown>>(
           writeFileSync(file, text, 'utf8')
           patch.artifacts = { [name]: file }
         }
-        // 问题四修复1+2：质量门验证（产物空/数量不足 → 抛错 → 节点失败 → 整图停，不再继续空跑）
+        // 问题四修复1+2 + v2.0：质量门验证（结构化 gate；失败 → 抛错 → 整图停）
         if (options.qualityGate && options.qualityGate.length > 0) {
-          // 非空门语义：子代理实际输出文本非空（避免"产物文件写了但 0 行"的假通过）
-          const gateFailures: string[] = []
-          for (const gate of options.qualityGate) {
-            if (gate.includes('非空') && text.length === 0) {
-              gateFailures.push(`质量门未过: ${gate}（子代理产出为空）`)
-            }
-          }
-          const validation = validateNodeOutput(patch, options.qualityGate)
-          for (const f of validation.failures) gateFailures.push(f)
-          if (gateFailures.length > 0) {
-            const err = new Error(`质量门未过（节点 ${name}）: ${gateFailures.join('; ')}`)
+          const validation = validateNodeOutput(patch, options.qualityGate as never)
+          if (!validation.passed) {
+            const err = new Error(`质量门未过（节点 ${name}）: ${validation.failures.join('; ')}`)
             logger.warn('weave-addsubagent', '质量门未过，节点失败（整图终止）', {
               node: name,
-              failures: gateFailures,
+              failures: validation.failures,
             })
             throw err
           }
