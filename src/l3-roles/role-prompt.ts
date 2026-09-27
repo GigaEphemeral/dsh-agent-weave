@@ -26,14 +26,32 @@ export const PROBE_COLLAB_RULES = `【探测协作规范】
 3. 若发现上游已探测过的对象（见"已探测"清单），不要再探测。
 4. 最终产物末尾必须包含本次所有 reusable=true 的探测。`
 
-/** ★ 问题6：异步 subagent 工作方式（所有角色适用）。 */
+/** ★ Bugs-V5：异步 subagent 工作方式（允许主动提问）。 */
 export const ASYNC_SUBAGENT_RULES = `【工作方式（所有角色适用）】
-你是异步 subagent，没有与用户对话的通道。
-- ❌ 不要"停下来等用户回答"——没有任何机制把回答送回来
-- ❌ 不要输出"请用户确认 xxx 后再继续"——图不会因此暂停
-- ✅ 遇到不明确：先按合理假设继续（标 ⚠️ + 证据等级）
-- ✅ 把本该问用户的问题写入产物的"待确认问题清单"章节
-- ✅ 主 agent 会把产物呈现给用户，用户回答后可决定是否重跑/resume`
+你是异步 subagent，但**可以通过 ask_user 工具主动向用户提问**。
+
+✅ **什么时候用 ask_user**（关键决策点）：
+- 需求模糊，有**多个合理方案**，且选择会**影响下游大量工作**
+  （例：五子棋"要不要 AI 对战""分几档难度"；俄罗斯方块"要不要多人模式"）
+- **涉及用户偏好/风格**（例："UI 暗色还是亮色""中文还是英文界面"）
+- **涉及安全/权限/预算/外部依赖**（例："允许调用外部 API 吗""预算上限多少"）
+
+❌ **什么时候不用**：
+- 有**行业标准**可循（"五子棋 15×15"、"俄罗斯方块 10×20"、"黑先白后"）
+- **影响范围小**（"按钮圆角多少像素"）
+- **上游已有明确约束**（读上游产物即可）
+
+【调用 ask_user 时】
+- 必须提供 default（用户超时不回答时用）—— 否则图会卡死
+- 必须提供 impact（帮用户快速判断影响）
+- 一次只问一件事；可给 2-4 个选项
+- 一次节点**最多问 3 次**（超过用 default + 记入"待确认问题清单"）
+- 调用前先输出"[动作] 需要用户决策：<问题摘要>"
+
+【不用 ask_user 时】
+- 小不确定：先按合理假设继续（标 ⚠️ + 证据等级）
+- 所有不确定的假设，写入产物的"待确认问题清单"章节
+`
 
 /** 从 capability 推导默认禁止（无 role_boundary 时兜底）。 */
 function deriveDefaultForbidden(role: RoleDefinition | undefined): string[] {
@@ -49,7 +67,11 @@ function deriveDefaultForbidden(role: RoleDefinition | undefined): string[] {
 }
 
 /** 构建角色 Prompt 边界块。 */
-export function buildRoleBoundaryBlock(role: RoleDefinition | undefined, provider: string): string {
+export function buildRoleBoundaryBlock(
+  role: RoleDefinition | undefined,
+  provider: string,
+  actualArtifactName?: string,
+): string {
   const lines: string[] = []
   const boundary = role?.role_boundary
   const responsibilities = boundary?.responsibilities ?? role?.capabilities ?? ['完成分配的任务']
@@ -67,7 +89,9 @@ export function buildRoleBoundaryBlock(role: RoleDefinition | undefined, provide
   const artifact = boundary?.artifact
   if (artifact) {
     lines.push(`【你的产物要求】`)
-    lines.push(`  · 文件名: ${artifact.name}`)
+    // ★ Bugs-v3 修复1：优先用引擎解析出的实际文件名（YAML > role_boundary > <nodeId>.md）
+    const displayName = actualArtifactName ?? artifact.name
+    lines.push(`  · 文件名: ${displayName}`)
     lines.push(`  · 类型: ${artifact.type}`)
     if (artifact.required_sections.length > 0) {
       lines.push(`  · 必须包含章节（缺一即失败）:`)

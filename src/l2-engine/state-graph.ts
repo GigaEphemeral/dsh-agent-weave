@@ -19,8 +19,8 @@
  * - S11：无出边发 warning 级 graph/error 事件（不改变成功语义）
  * - S13：node-end 事件携带 inputTokens/outputTokens/cacheReadTokens/tokenUsed/retryCount
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
   ConditionHandler,
@@ -39,6 +39,7 @@ import { getGraphControl, clearGraphControl } from './graph-control.js'
 import { classifyError } from './error-classifier.js'
 import { writePauseSnapshot } from './pause-snapshot.js'
 import { waitForSubagentEnd, PauseError } from './subagent-waiter.js'
+import { interruptSubagent } from './subagent-events.js'
 import { buildRoleBoundaryBlock } from '../l3-roles/role-prompt.js'
 import { buildUpstreamContextBlocks } from './handoff-extractor.js'
 import type { PauseSnapshot } from './types.js'
@@ -51,6 +52,48 @@ import { reusableFindingsText } from './findings-pool.js'
 let currentNodeCtx: { artifactsRoot: string | undefined; graphId: string; nodeId: string } | null = null
 export function getCurrentNodeCtx(): { artifactsRoot: string | undefined; graphId: string; nodeId: string } {
   return currentNodeCtx ?? { artifactsRoot: undefined, graphId: '', nodeId: '' }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ★ Bugs-V5：ask_user 支持
+// ═══════════════════════════════════════════════════════════════
+
+interface AskUserQuestion {
+  question: string
+  options?: string[]
+  default?: string
+  impact?: string
+}
+
+/** 待处理的 ask_user 请求（graphId → 请求详情）。 */
+const pendingAskUser = new Map<string, {
+  nodeId: string
+  question: AskUserQuestion
+  at: number
+}>()
+
+/** pause trigger 表（graphId → 触发函数）。 */
+const graphPauseTriggers = new Map<string, (nodeId: string, question: AskUserQuestion) => void>()
+
+/** ask_user 工具上下文（供 index.ts 注册工具用）。 */
+export function getAskUserContext(): {
+  getNodeCtx: () => { artifactsRoot: string | undefined; graphId: string; nodeId: string }
+  triggerPause: (graphId: string, nodeId: string, question: AskUserQuestion) => void
+} {
+  return {
+    getNodeCtx: () => currentNodeCtx ?? { artifactsRoot: undefined, graphId: '', nodeId: '' },
+    triggerPause: (graphId, nodeId, question) => {
+      // 1. 记录待处理请求（引擎 catch/正常流程读取）
+      pendingAskUser.set(graphId, { nodeId, question, at: Date.now() })
+      // 2. 触发当前节点的 pause trigger（内部会 interrupt subagent）
+      const trigger = graphPauseTriggers.get(graphId)
+      if (trigger) {
+        trigger(nodeId, question)
+      } else {
+        logger.warn('weave-ask-user', 'pause trigger 未注册（节点可能已结束）', { graphId, nodeId })
+      }
+    },
+  }
 }
 
 /** ★ 问题2：全局 graphId → (nodeId → childId) 映射（节点级控制：interrupt/sendMessage）。 */
@@ -209,6 +252,8 @@ export interface SubagentNodeOptions {
   }
   /** ★ v2.0：角色定义（Prompt 边界块注入 + quality_gate 数据源）。 */
   roleDefinition?: { id: string; capabilities: string[]; role_boundary?: { responsibilities?: string[]; forbidden?: string[]; artifact?: { name: string; type: string; required_sections: string[] } } }
+  /** ★ Bugs-v3 修复3：workspace 根（用于相对路径 + 多候选查找）。 */
+  workspace?: string
 }
 
 /** 引擎实例选项。 */
@@ -334,6 +379,29 @@ export function createStateGraph<T extends Record<string, unknown>>(
         }
         // 通道 C（问题 5）：行为约束——子代理每步输出 [动作]，供观测"在干什么"
         // ★ v2 问题2 方案B：默认模板强调"单一职责"（防止 R1 越权做 R2/R4/R6 的活）
+        // ★ Bugs-v3 修复3：计算产物相对路径（提示子代理写到正确位置，避免写 workspace 根裸文件名）
+        const relativeArtifactPath = (() => {
+          if (!options.artifactName || !artifactsRoot || !options.workspace) return null
+          try {
+            const rel = relative(options.workspace, artifactsRoot).replace(/\\/g, '/')
+            return `${rel}/graph-artifacts/${name}/${options.artifactName}`
+          } catch {
+            return null
+          }
+        })()
+
+        const artifactInstruction = relativeArtifactPath
+          ? `【你的产出】（严格遵守，违反即失败）
+你必须使用 **write 工具**把产物写到这个**相对路径**（相对你的工作目录）：
+  ${relativeArtifactPath}
+
+**只写这一个文件**，不要写其他位置（不要写工作目录根的裸文件名如 ${options.artifactName}）。
+文件内容就是产物本体（不是"我完成了"之类的报告或总结）。
+写完即结束，不要在产物外附加说明性文字。`
+          : `【你的产出】
+文件名：{{artifactName}}
+写完即结束，不要在产物外附加说明性文字。`
+
         const defaultTemplate = `你是 {{provider}}，请完成下列**单一职责**任务。
 
 【用户原始需求】（这是整个工作流的输入，不是你一个人的任务）
@@ -344,11 +412,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
 【你的任务】
 仅完成 {{provider}} 角色职责范围内的产出。**不要越权做其他角色的工作**。
-例如：你是需求分析师时，只写需求文档，**不要写代码/架构/测试文档**。
 
-【你的产出】
-文件名：{{artifactName}}
-写完即结束，不要在产物外附加说明性文字。
+${artifactInstruction}
 
 【行为约束】
 每次调用工具前，先输出一行 "[动作] 正在 <做什么>（工具: <toolName>）"。`
@@ -363,9 +428,11 @@ export function createStateGraph<T extends Record<string, unknown>>(
           .replaceAll('{{upstream}}', upstreamSummary)
           .replaceAll('{{artifactName}}', options.artifactName ?? `${name}.md`)
         // ★ v2.0：Prompt 边界块注入（职责/禁止/产物要求/handoff 模板/探测协作）
+        // ★ Bugs-v3 修复1：边界块传实际 artifactName（避免双文件名）
         const boundaryBlock = buildRoleBoundaryBlock(
           options.roleDefinition as never,
           options.provider,
+          options.artifactName,
         )
         // ★ v2.0 Phase E：注入共享发现池（其他节点已探测，避免重复）
         const findingsText = artifactsRoot ? reusableFindingsText(artifactsRoot, nodeCtx.graphId) : ''
@@ -436,6 +503,26 @@ export function createStateGraph<T extends Record<string, unknown>>(
           // ★ 步骤3：新 waiter 订阅活动 → 转发 graph/node-activity / idle-warning / loop-detected
           // （问题三 A3：无硬超时；A4/A5：中止 → interrupt；D2/D3：循环/空闲仅提示）
           // ★ Bugs-V1 §9.4：图级控制信号优先（graphSignal）；缺省用 run signal
+          // ★ Bugs-V5：注册 pause trigger（供 ask_user 工具调用）
+          graphPauseTriggers.set(nodeCtx.graphId, (triggerNodeId, _question) => {
+            if (triggerNodeId !== name) {
+              logger.warn('weave-ask-user', 'trigger 的 nodeId 与当前节点不符', {
+                graphId: nodeCtx.graphId, expected: name, actual: triggerNodeId,
+              })
+              return
+            }
+            logger.info('weave-ask-user', 'pause trigger 触发，interrupt 当前 subagent', {
+              graphId: nodeCtx.graphId, node: name, childId: activeChildId,
+            })
+            // ★ 打断当前 subagent：subagent/end 事件 → waitForSubagentEnd reject
+            // → addSubagent throw → run() catch → 检查 pendingAskUser → 走 ask-user 暂停
+            void interruptSubagent(nodeCtx.ctx, activeChildId, agent).catch((err) => {
+              logger.warn('weave-ask-user', 'interrupt 失败', {
+                childId: activeChildId,
+                error: err instanceof Error ? err.message : String(err),
+              })
+            })
+          })
           const effectiveSignal = nodeCtx.graphSignal ?? signal
           result = await waitForSubagentEnd(nodeCtx.ctx, activeChildId, {
             ...(effectiveSignal !== undefined ? { signal: effectiveSignal } : {}),
@@ -509,9 +596,60 @@ export function createStateGraph<T extends Record<string, unknown>>(
         if (options.artifactName && artifactsRoot) {
           const nodeDir = join(artifactsRoot, 'graph-artifacts', name)
           mkdirSync(nodeDir, { recursive: true })
-          const file = join(nodeDir, options.artifactName)
-          writeFileSync(file, text, 'utf8')
-          patch.artifacts = { [name]: file }
+          const canonicalFile = join(nodeDir, options.artifactName)
+
+          // ★ Bugs-v3 修复3：多候选查找（子代理可能写到非规范位置）
+          const candidates: string[] = [canonicalFile]
+          if (options.workspace) {
+            candidates.push(
+              join(options.workspace, options.artifactName),
+              join(options.workspace, 'productions', options.artifactName),
+              join(options.workspace, 'productions', 'graph-artifacts', name, options.artifactName),
+              join(options.workspace, 'graph-artifacts', name, options.artifactName),
+            )
+          }
+          candidates.push(join(artifactsRoot, options.artifactName))
+
+          let foundFile: string | null = null
+          let foundSize = 0
+          for (const c of candidates) {
+            try {
+              const st = statSync(c)
+              if (st.size >= 100) { foundFile = c; foundSize = st.size; break }
+            } catch {
+              // 继续
+            }
+          }
+
+          if (foundFile) {
+            if (foundFile === canonicalFile) {
+              logger.info('weave-addsubagent', '产物由子代理写入规范路径，引擎不覆盖', {
+                node: name, file: canonicalFile, size: foundSize,
+              })
+              patch.artifacts = { [name]: canonicalFile }
+            } else {
+              try {
+                copyFileSync(foundFile, canonicalFile)
+                logger.info('weave-addsubagent', '子代理写到非规范位置，已复制到规范路径', {
+                  node: name, from: foundFile, to: canonicalFile, size: foundSize,
+                })
+                patch.artifacts = { [name]: canonicalFile }
+              } catch (err) {
+                logger.warn('weave-addsubagent', '复制失败，使用原位置', {
+                  node: name, from: foundFile,
+                  error: err instanceof Error ? err.message : String(err),
+                })
+                patch.artifacts = { [name]: foundFile }
+              }
+            }
+          } else {
+            logger.warn('weave-addsubagent', '子代理未产出有效文件，引擎用 output text 兜底', {
+              node: name, canonicalFile, fallbackSize: text.length,
+              candidatesChecked: candidates,
+            })
+            writeFileSync(canonicalFile, text, 'utf8')
+            patch.artifacts = { [name]: canonicalFile }
+          }
         }
         // 问题四修复1+2 + v2.0：质量门验证（结构化 gate；失败 → 抛错 → 整图停）
         if (options.qualityGate && options.qualityGate.length > 0) {
@@ -643,6 +781,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
         const ctrl = getGraphControl(graphId)
         if (ctrl.isStopped()) {
           emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { stopped: true } })
+          graphPauseTriggers.delete(graphId)
+          pendingAskUser.delete(graphId)
           return { graphId, success: true, finalState: state, trajectory, iterations: iteration, data: { stopped: true } }
         }
         if (ctrl.isPaused()) {
@@ -650,6 +790,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
           await ctrl.waitForResume()
           if (ctrl.isStopped()) {
             emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { stopped: true } })
+            graphPauseTriggers.delete(graphId)
+            pendingAskUser.delete(graphId)
             return { graphId, success: true, finalState: state, trajectory, iterations: iteration, data: { stopped: true } }
           }
           emit({ type: 'graph/checkpoint-written', graphId, node: current, timestamp: Date.now(), data: { resumed: true } })
@@ -658,6 +800,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
         // P4.D.1：节点边界 STOP 检查（先于迭代计数——STOP 应立即可终止）
         if (artifactsRoot && existsSync(join(artifactsRoot, 'STOP'))) {
           emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { stopped: true } })
+          graphPauseTriggers.delete(graphId)
+          pendingAskUser.delete(graphId)
           return { graphId, success: true, finalState: state, trajectory, iterations: iteration, data: { stopped: true } }
         }
         // P4.D.1：节点边界 PAUSE 检查（等待 RESUME/STOP；200ms 轮询 + 外部中止）
@@ -667,10 +811,14 @@ export function createStateGraph<T extends Record<string, unknown>>(
           while (existsSync(join(artifactsRoot, 'PAUSE'))) {
             if (options.signal?.aborted) {
               emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { status: 'failed', reason: 'aborted' } })
+              graphPauseTriggers.delete(graphId)
+              pendingAskUser.delete(graphId)
               return { graphId, success: false, finalState: state, trajectory, iterations: iteration, error: new Error('暂停等待被中止') }
             }
             if (existsSync(join(artifactsRoot, 'STOP'))) {
               emit({ type: 'graph/end', graphId, timestamp: Date.now(), data: { stopped: true } })
+              graphPauseTriggers.delete(graphId)
+              pendingAskUser.delete(graphId)
               return { graphId, success: true, finalState: state, trajectory, iterations: iteration, data: { stopped: true } }
             }
             await new Promise((r) => setTimeout(r, 200))
@@ -683,6 +831,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
         if (++iteration > maxIterations) {
           const err = new Error(`迭代次数超过上限（${maxIterations}），疑似死循环，已终止。`)
           emit({ type: 'graph/error', graphId, timestamp: Date.now(), data: { error: err.message } })
+          graphPauseTriggers.delete(graphId)
+          pendingAskUser.delete(graphId)
           return { graphId, success: false, finalState: state, trajectory, iterations: iteration, error: err }
         }
 
@@ -691,6 +841,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
         if (!acquired) {
           const err = new Error(`并发闸拒绝激活节点: ${current}`)
           emit({ type: 'graph/node-error', graphId, node: current, timestamp: Date.now(), data: { error: err.message } })
+          graphPauseTriggers.delete(graphId)
+          pendingAskUser.delete(graphId)
           return { graphId, success: false, finalState: state, trajectory, iterations: iteration, error: err }
         }
 
@@ -787,6 +939,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
               timestamp: Date.now(),
               data: { conflicts: mergeResult.conflicts },
             })
+            graphPauseTriggers.delete(graphId)
+            pendingAskUser.delete(graphId)
             return {
               graphId,
               success: false,
@@ -819,6 +973,76 @@ export function createStateGraph<T extends Record<string, unknown>>(
               ...(pending.retry !== null ? { retryCount: pending.retry } : {}),
             },
           })
+
+          // ★ Bugs-V5：检查 ask_user（subagent 主动提问 → 图暂停）
+          if (pendingAskUser.has(graphId)) {
+            const askReq = pendingAskUser.get(graphId)!
+            pendingAskUser.delete(graphId)
+            logger.info('weave', '图暂停（等待用户决策）', {
+              graphId, node: current,
+              question: askReq.question.question.slice(0, 200),
+              path: 'normal-flow',
+            })
+
+            if (artifactsRoot) {
+              try {
+                const snapshot: PauseSnapshot<T> = {
+                  graphId,
+                  graphVersion: options.graphVersion,
+                  graphSchemaHash: options.graphSchemaHash,
+                  pausedNode: current,
+                  pausedAt: Date.now(),
+                  iteration,
+                  resumeFrom: current,
+                  pauseReason: 'awaiting-user-input',
+                  pauseDetails: {
+                    suggestedAction: `请回答节点 ${current} 的问题：${askReq.question.question}`,
+                    contextTemplate: JSON.stringify(askReq.question),
+                  },
+                  state,
+                  loopUsage: Object.fromEntries(loopUsed),
+                  childSessions: Object.fromEntries(childIdByNode),
+                  completedNodes: [...completedNodes],
+                }
+                writePauseSnapshot(artifactsRoot, snapshot)
+              } catch (snapErr) {
+                logger.warn('weave', '暂停快照落盘失败', {
+                  graphId,
+                  error: snapErr instanceof Error ? snapErr.message : String(snapErr),
+                })
+              }
+            }
+
+            emit({
+              type: 'graph/paused',
+              graphId,
+              node: current,
+              timestamp: Date.now(),
+              data: {
+                reason: 'awaiting-user-input',
+                question: askReq.question,
+                resumeFrom: current,
+              },
+            })
+
+            await notifyMainAgentPaused(ctx, options.agent, {
+              graphId,
+              node: current,
+              reason: 'awaiting-user-input',
+              ...(artifactsRoot !== undefined ? { artifactsRoot } : {}),
+              askQuestion: askReq.question,
+            })
+
+            return {
+              graphId, success: true, finalState: state, trajectory, iterations: iteration,
+              data: {
+                paused: true,
+                reason: 'awaiting-user-input',
+                resumeFrom: current,
+                question: askReq.question,
+              },
+            }
+          }
 
           // RES.10 §一.4 + S4：checkpoint 在"补丁合并后、跳转前"，落盘 loopUsage
           await options.checkpoint({
@@ -892,6 +1116,76 @@ export function createStateGraph<T extends Record<string, unknown>>(
           current = next
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error))
+          // ★ Bugs-V5：优先检查 ask_user（subagent 被 interrupt 导致 reject）
+          if (pendingAskUser.has(graphId)) {
+            const askReq = pendingAskUser.get(graphId)!
+            pendingAskUser.delete(graphId)
+            logger.info('weave', '图暂停（等待用户决策）', {
+              graphId, node: current,
+              question: askReq.question.question.slice(0, 200),
+              path: 'catch-flow',
+            })
+
+            if (artifactsRoot) {
+              try {
+                const snapshot: PauseSnapshot<T> = {
+                  graphId,
+                  graphVersion: options.graphVersion,
+                  graphSchemaHash: options.graphSchemaHash,
+                  pausedNode: current,
+                  pausedAt: Date.now(),
+                  iteration,
+                  resumeFrom: current,
+                  pauseReason: 'awaiting-user-input',
+                  pauseDetails: {
+                    suggestedAction: `请回答节点 ${current} 的问题：${askReq.question.question}`,
+                    contextTemplate: JSON.stringify(askReq.question),
+                  },
+                  state,
+                  loopUsage: Object.fromEntries(loopUsed),
+                  childSessions: Object.fromEntries(childIdByNode),
+                  completedNodes: [...completedNodes],
+                }
+                writePauseSnapshot(artifactsRoot, snapshot)
+              } catch (snapErr) {
+                logger.warn('weave', '暂停快照落盘失败', {
+                  graphId,
+                  error: snapErr instanceof Error ? snapErr.message : String(snapErr),
+                })
+              }
+            }
+
+            emit({
+              type: 'graph/paused',
+              graphId,
+              node: current,
+              timestamp: Date.now(),
+              data: {
+                reason: 'awaiting-user-input',
+                question: askReq.question,
+                resumeFrom: current,
+              },
+            })
+
+            await notifyMainAgentPaused(ctx, options.agent, {
+              graphId,
+              node: current,
+              reason: 'awaiting-user-input',
+              ...(artifactsRoot !== undefined ? { artifactsRoot } : {}),
+              askQuestion: askReq.question,
+            })
+
+            return {
+              graphId, success: true, finalState: state, trajectory, iterations: iteration,
+              data: {
+                paused: true,
+                reason: 'awaiting-user-input',
+                resumeFrom: current,
+                question: askReq.question,
+              },
+            }
+          }
+
           // ★ 问题三 B1/A4+A5 + Bugs-V1 §9.4：用户暂停（PauseError）→ 写快照 + graph/paused
           if (error instanceof PauseError) {
             logger.info('weave', '图暂停（用户暂停）', { graphId, node: current })
@@ -935,6 +1229,9 @@ export function createStateGraph<T extends Record<string, unknown>>(
               ...(artifactsRoot !== undefined ? { artifactsRoot } : {}),
             })
             // 不 clearGraphControl（等 resume 重置信号）
+            // ★ Bugs-V5：清理 ask_user 状态
+            graphPauseTriggers.delete(graphId)
+            pendingAskUser.delete(graphId)
             return {
               graphId, success: true, finalState: state, trajectory, iterations: iteration,
               data: { paused: true, reason: 'user-pause', resumeFrom: current },
@@ -947,6 +1244,9 @@ export function createStateGraph<T extends Record<string, unknown>>(
             clearGraphControl(graphId)
             clearGraphNodeChildren(graphId)
             graphParentAgents.delete(graphId)
+            // ★ Bugs-V5：清理 ask_user 状态
+            graphPauseTriggers.delete(graphId)
+            pendingAskUser.delete(graphId)
             return {
               graphId, success: true, finalState: state, trajectory, iterations: iteration,
               data: { stopped: true },
@@ -1000,6 +1300,9 @@ export function createStateGraph<T extends Record<string, unknown>>(
             } catch (snapshotErr) {
               logger.error('weave', '暂停快照落盘失败，回退 node-error', snapshotErr instanceof Error ? snapshotErr : new Error(String(snapshotErr)), { graphId })
             }
+            // ★ Bugs-V5：清理 ask_user 状态
+            graphPauseTriggers.delete(graphId)
+            pendingAskUser.delete(graphId)
             return {
               graphId,
               success: false,
@@ -1018,6 +1321,9 @@ export function createStateGraph<T extends Record<string, unknown>>(
             timestamp: Date.now(),
             data: { error: err.message },
           })
+          // ★ Bugs-V5：清理 ask_user 状态
+          graphPauseTriggers.delete(graphId)
+          pendingAskUser.delete(graphId)
           return {
             graphId,
             success: false,
@@ -1038,31 +1344,83 @@ export function createStateGraph<T extends Record<string, unknown>>(
       // ★ 问题2：运行结束清理节点级控制映射
       clearGraphNodeChildren(graphId)
       graphParentAgents.delete(graphId)
+      // ★ Bugs-V5：清理 ask_user 状态
+      graphPauseTriggers.delete(graphId)
+      pendingAskUser.delete(graphId)
       return { graphId, success: true, finalState: state, trajectory, iterations: iteration }
     },
   }
 }
 
 /** ★ 问题2：图暂停时通知主 agent（防它自动重跑）。双通道：approval 卡 + PAUSED 文件 fallback。 */
+/** ★ Bugs-V5：加 askQuestion 参数，生成问答式通知。 */
 async function notifyMainAgentPaused(
   ctx: Context,
   agent: unknown,
-  info: { graphId: string; node: string; reason: string; artifactsRoot?: string },
+  info: {
+    graphId: string
+    node: string
+    reason: string
+    artifactsRoot?: string
+    /** ★ Bugs-V5：ask_user 问题详情。 */
+    askQuestion?: AskUserQuestion
+  },
 ): Promise<void> {
-  const reasonText =
-    `⚠ 图 ${info.graphId} 已在节点 ${info.node} 暂停（${info.reason}）。\n` +
-    `图执行循环已停止，不会再创建下一步子代理。\n\n` +
-    `【主 agent 必读】\n` +
-    `1. 向用户报告暂停位置与原因，等待用户明确指示。\n` +
-    `2. 禁止自动调用 weave_run_graph 重跑整个图（重复消耗 token）。\n` +
-    `3. 用户指示继续时，调用 weave_graph_resume graph_id=${info.graphId}。\n` +
-    `4. 用户指示放弃时，无需进一步操作。`
+  let reasonText: string
+
+  if (info.askQuestion) {
+    const q = info.askQuestion
+    const lines: string[] = [
+      `❓ 图 ${info.graphId} 在节点 ${info.node} **等待你的决策**：`,
+      '',
+      `【问题】`,
+      q.question,
+    ]
+    if (q.options && q.options.length > 0) {
+      lines.push('', '【选项】')
+      for (const opt of q.options) lines.push(`  · ${opt}`)
+    }
+    if (q.default) {
+      lines.push('', `【默认假设（超时不答时使用）】`, q.default)
+    }
+    if (q.impact) {
+      lines.push('', `【影响范围】`, q.impact)
+    }
+    lines.push(
+      '',
+      '【如何回答】',
+      `调用 weave_graph_resume graph_id=${info.graphId} additional_context="<你的回答>"`,
+      '',
+      '【主 agent 必读】',
+      '1. 把上面的问题和选项**原样呈现给用户**，等待用户明确回答。',
+      '2. 用户回答后，调 weave_graph_resume 并把回答放进 additional_context。',
+      '3. 禁止自动重跑整图（重复消耗 token）。',
+      '4. 用户长时间不回答也不催——图已暂停，不会自动往下跑。',
+    )
+    reasonText = lines.join('\n')
+  } else {
+    reasonText =
+      `⚠ 图 ${info.graphId} 已在节点 ${info.node} 暂停（${info.reason}）。\n` +
+      `图执行循环已停止，不会再创建下一步子代理。\n\n` +
+      `【主 agent 必读】\n` +
+      `1. 向用户报告暂停位置与原因，等待用户明确指示。\n` +
+      `2. 禁止自动调用 weave_run_graph 重跑整个图（重复消耗 token）。\n` +
+      `3. 用户指示继续时，调用 weave_graph_resume graph_id=${info.graphId}。\n` +
+      `4. 用户指示放弃时，无需进一步操作。`
+  }
 
   const approvalService = ctx.get('approval') as ApprovalServiceLike | undefined
   if (approvalService && agent) {
     try {
-      await approvalService.request({ agent, toolName: 'weave.graph.paused', reason: reasonText })
-      logger.info('weave', '已通过 approval 通知主 agent', { graphId: info.graphId })
+      await approvalService.request({
+        agent,
+        toolName: info.askQuestion ? 'weave.ask_user' : 'weave.graph.paused',
+        reason: reasonText,
+      })
+      logger.info('weave', '已通过 approval 通知主 agent', {
+        graphId: info.graphId,
+        kind: info.askQuestion ? 'ask-user' : 'paused',
+      })
       return
     } catch (err) {
       logger.warn('weave', 'approval 通知失败，走 fallback', {
@@ -1077,7 +1435,10 @@ async function notifyMainAgentPaused(
       writeFileSync(join(info.artifactsRoot, 'PAUSED'), reasonText, 'utf8')
       logger.info('weave', '已写 PAUSED 文件（fallback）', { graphId: info.graphId })
     } catch (err) {
-      logger.warn('weave', '写 PAUSED 失败', { graphId: info.graphId, error: String(err) })
+      logger.warn('weave', '写 PAUSED 失败', {
+        graphId: info.graphId,
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 }

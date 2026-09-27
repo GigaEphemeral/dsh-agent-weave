@@ -121,6 +121,8 @@ export async function resumeGraphRealTool(
         provider: node.roleRef,
         artifactName: node.artifactName ?? `${node.id}.md`,
         role: node.roleRef,
+        // ★ Bugs-v3 修复4：传 workspace（相对路径 + 多候选查找）
+        ...(workspace !== undefined ? { workspace } : {}),
         ...(node.promptTemplate !== undefined ? { promptTemplate: node.promptTemplate } : {}),
         ...(node.inputGate !== undefined ? { inputGate: node.inputGate } : {}),
       })

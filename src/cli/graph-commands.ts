@@ -14,6 +14,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { computeGraphSchemaHash, parseGraphDefinitionYaml } from '../l2-engine/graph-definition.js'
 import { validateGraph, type ValidationResult } from '../l2-engine/static-validator.js'
+import { DEFAULT_GRAPH_YAML, DEFAULT_GRAPH_FILENAME } from '../l2-engine/default-graph.js'
 import type { GraphDefinitionSpec, GraphEdgeSpec } from '../l2-engine/types.js'
 
 /**
@@ -141,10 +142,10 @@ export function registerGraphCommands(ctx: Context): () => void {
       defineTool({
         name: 'weave_graph_validate',
         description:
-          '校验 YAML 图定义：Schema 校验（节点 ID 正则/边类型/cond 有 when/loop 有 maxIter/自环约束）' +
-          '+ 静态验证（roleRef 注册/条件字段白名单/入口可达/环检测）。返回校验结果与 graphSchemaHash。',
+          '校验 YAML 图定义（path 可省略，缺省校验内置默认图）：Schema 校验 + 静态验证。' +
+          '返回校验结果与 graphSchemaHash。',
         parameters: {
-          path: { type: 'string', required: true, description: '图 YAML 文件路径' },
+          path: { type: 'string', description: '图 YAML 文件路径（缺省=内置默认图）' },
         },
         output: {
           schema: { type: 'string' },
@@ -154,10 +155,14 @@ export function registerGraphCommands(ctx: Context): () => void {
         },
         async execute(args, exec) {
           const workspace = resolveExecWorkspace(exec)
-          const spec = loadGraphSpec(args.path, workspace)
+          // ★ Bugs-v3：path 可选（缺省用内置默认图）
+          const spec = args.path
+            ? loadGraphSpec(args.path, workspace)
+            : parseGraphDefinitionYaml(DEFAULT_GRAPH_YAML, '<builtin-default>')
           const roles = new Set(ctx.subagents.list())
           const result = validateGraph(spec, { registeredRoles: roles })
-          return formatValidation(resolveGraphPath(args.path, workspace), spec, result)
+          const displayPath = args.path ? resolveGraphPath(args.path, workspace) : '<builtin-default>'
+          return formatValidation(displayPath, spec, result)
         },
       }),
     ),
@@ -167,9 +172,9 @@ export function registerGraphCommands(ctx: Context): () => void {
     ctx.tools.register(
       defineTool({
         name: 'weave_graph_show',
-        description: '显示 YAML 图定义的 ASCII 结构：入口、节点/边数、主链、loop/cond 标注、节点详情。',
+        description: '显示 YAML 图定义的 ASCII 结构（path 可省略，缺省显示内置默认图）。',
         parameters: {
-          path: { type: 'string', required: true, description: '图 YAML 文件路径' },
+          path: { type: 'string', description: '图 YAML 文件路径（缺省=内置默认图）' },
         },
         output: {
           schema: { type: 'string' },
@@ -179,7 +184,10 @@ export function registerGraphCommands(ctx: Context): () => void {
         },
         async execute(args, exec) {
           const workspace = resolveExecWorkspace(exec)
-          const spec = loadGraphSpec(args.path, workspace)
+          // ★ Bugs-v3：path 可选（缺省用内置默认图）
+          const spec = args.path
+            ? loadGraphSpec(args.path, workspace)
+            : parseGraphDefinitionYaml(DEFAULT_GRAPH_YAML, '<builtin-default>')
           return renderAsciiGraph(spec)
         },
       }),
@@ -200,47 +208,176 @@ export function registerGraphCommands(ctx: Context): () => void {
         },
         async execute() {
           return [
-            'MVP-4 图命令（dsh-agent-weave）:',
+            '══════════════════════════════════════════════════════════',
+            '  weave 图命令帮助',
+            '══════════════════════════════════════════════════════════',
             '',
-            '  weave_graph_validate path=<yaml>   校验图（Schema + 静态验证 + schemaHash）',
-            '  weave_graph_show path=<yaml>       显示 ASCII 图结构',
-            '  weave_run_graph path=<yaml> user_input=<需求> [output_dir=] [initial_state=]',
-            '                                    启动图执行（异步）：校验 → 后台跑真实子代理 → 立即返回 graphId',
-            '  weave_graph_status                 查看最近一次图执行状态快照',
-            '  weave_graph_tail [lines=N]         查看最近一次图执行的 trace 事件流',
-            '  weave_graph_watch path=<yaml>      运行图（mock，零 LLM）并输出终端实时视图',
-            '  weave_graph_report path=<yaml>     运行图（mock）并生成 HTML 报告',
-            '  weave_graph_resume graph_id=<id> [additional_context=] [output_dir=]',
-            '                                    从暂停快照恢复图执行（异步），复用同一子代理',
+            '## ⚡ 快速开始（99% 场景：直接跑默认图，不要写 YAML）',
             '',
-            '图 YAML 结构：version / graphVersion / graphSchemaHash / entryPoint /',
-            '  maxIterations / nodes[] / edges[] / checkpoint / metadata / observers?',
+            '  weave_run_graph user_input="<用户需求原话>"',
             '',
-            '## ⚠️ 运行图时必读',
+            '  引擎内置六角色串行图（R1→R2→R4→R6→R7→R8）。',
+            '  **默认不要传 path**。不要读 README / docs / workflows / roles 找图格式——已内置。',
             '',
-            '1. **禁止探测插件源码**：不要读取/搜索 dsh-agent-weave 插件的源码（lib/、src/、node_modules/ 下的实现文件）',
-            '   来"理解"工具行为。工具契约以本 help 与工具参数描述为准；探测源码浪费 token 且违反使用约定。',
-            '2. **调用 weave_run_graph 后**：工具会立即返回 graphId（status=started），图在后台异步执行。',
-            '   向用户报告"图已启动 + graphId"，不要等待图跑完才回复。',
-            '3. **图出错时**：如果 weave_run_graph / weave_graph_resume 返回错误，或图在运行中暂停，',
-            '   调用本工具（weave_graph_help）查看各工具的用途与参数，再决定下一步（如 weave_graph_resume）。',
+            '## 🚫 禁止行为（违反浪费时间）',
             '',
-            '## 暂停处理契约（主 agent 必读）',
+            '  1. **禁止探测插件源码**：不读 dsh-agent-weave 的 lib/、src/、node_modules/ 实现。',
+            '  2. **禁止为找图格式去读 README / docs / workflows / roles**——本 help 已给完整模板。',
+            '  3. **禁止 Glob **/*.yaml 找示例**——没有示例，用下面的模板。',
+            '  4. **调用 weave_run_graph 后**：立即向用户报告 graphId，不要等图跑完。',
             '',
-            '收到 graph 暂停（节点失败 / 权限不足 / 依赖缺失等，图返回 status=paused 或错误含"暂停"）时：',
+            '──────────────────────────────────────────────────────────',
+            '## 📋 参考模板（仅在用户明确要求自定义图时使用）',
+            '──────────────────────────────────────────────────────────',
             '',
-            '✅ **应该做**：',
-            '  1. 向用户报告：图在哪个节点暂停、为什么（错误信息）、建议怎么处理',
-            '  2. 等用户明确指示（授权 / 补上下文 / 跳过）',
+            '**最小可用模板**（复制即可，不需要改任何字段）：',
+            '',
+            '```yaml',
+            'version: "1"',
+            'graphVersion: "1.0.0"',
+            'graphSchemaHash: "placeholder"',
+            'entryPoint: requirement',
+            'maxIterations: 25',
+            'nodes:',
+            '  - { id: requirement,  roleRef: R1-requirement, nodeType: role }',
+            '  - { id: architecture, roleRef: R2-architect,   nodeType: role }',
+            '  - { id: design,       roleRef: R4-designer,    nodeType: role }',
+            '  - { id: develop,      roleRef: R6-developer,   nodeType: role }',
+            '  - { id: test,         roleRef: R7-tester,      nodeType: role }',
+            '  - { id: quality,      roleRef: R8-quality,     nodeType: role }',
+            'edges:',
+            '  - { from: requirement,  to: architecture, type: seq }',
+            '  - { from: architecture, to: design,       type: seq }',
+            '  - { from: design,       to: develop,      type: seq }',
+            '  - { from: develop,      to: test,         type: seq }',
+            '  - { from: test,         to: quality,      type: seq }',
+            'checkpoint: { strategy: node-level, storage: fs }',
+            'metadata:',
+            '  source: yaml',
+            '  createdAt: "2026-09-24T00:00:00Z"',
+            '  updatedAt: "2026-09-24T00:00:00Z"',
+            '```',
+            '',
+            '**★★★ 三条铁律（违反必失败）**：',
+            '',
+            '  ① **不要写 `artifactName`**！',
+            '     角色 YAML 已经声明了自己产什么文件（prd.md / arch.md / design.md / ...）。',
+            '     你写 `artifactName: r1.md` 会覆盖它，导致产出机械命名（r1.md）而不是 prd.md。',
+            '     ✅ 正确：`- { id: requirement, roleRef: R1-requirement, nodeType: role }`',
+            '     ❌ 错误：`- { id: r1, roleRef: R1-requirement, nodeType: role, artifactName: r1.md }`',
+            '',
+            '  ② **节点 id 必须用有意义的词**（不是 r1/r2）。',
+            '     推荐：requirement / architecture / design / develop / test / quality',
+            '     必须匹配 `^[a-z][a-z0-9_-]*$`（小写字母开头，只含小写/数字/下划线/连字符）。',
+            '',
+            '  ③ **version / graphVersion 必须是字符串**（带引号）。',
+            '     ✅ `version: "1"`   ❌ `version: 1`（YAML 会解析为数字，Schema 拒绝）',
+            '',
+            '──────────────────────────────────────────────────────────',
+            '## 🎭 可用角色（roleRef 只能填以下 6 个）',
+            '──────────────────────────────────────────────────────────',
+            '',
+            '  R1-requirement  需求分析师  → 产出 prd.md',
+            '  R2-architect    架构师      → 产出 arch.md',
+            '  R4-designer     详细设计师  → 产出 design.md',
+            '  R6-developer    开发者      → 产出 develop.md（唯一允许写代码/跑命令的角色）',
+            '  R7-tester       测试员      → 产出 report.md',
+            '  R8-quality      质量审核员  → 产出 review.md',
+            '',
+            '  其他 roleRef → 校验失败「角色未注册」',
+            '',
+            '──────────────────────────────────────────────────────────',
+            '## ⚠️ 常见错误（对照自查）',
+            '──────────────────────────────────────────────────────────',
+            '',
+            '  ❌ `version: 1`               → 必须是字符串 `"1"`',
+            '  ❌ `graphVersion: 1`          → 必须是字符串 `"1.0.0"`',
+            '  ❌ 缺 `graphSchemaHash`       → 必填；填 `"placeholder"` 即可（引擎自动重算）',
+            '  ❌ 缺 `checkpoint`            → 必填：`{ strategy: node-level, storage: fs }`',
+            '  ❌ 缺 `metadata`              → 必填（source/createdAt/updatedAt）',
+            '  ❌ `edges[].type: next`       → 只能是 `seq` / `cond` / `loop` / `parallel`',
+            '  ❌ `cond` 边缺 `when`         → cond 边必须有 when 字段',
+            '  ❌ `loop` 边缺 `maxIter`      → loop 边必须有 maxIter（正整数）',
+            '  ❌ `node.id: R1`（大写）       → 必须 `^[a-z][a-z0-9_-]*$`',
+            '  ❌ node 缺 `nodeType`         → 必填：`role` / `condition` / `approval`',
+            '  ❌ `entryPoint` 指向不存在    → 必须指向已定义节点',
+            '',
+            '──────────────────────────────────────────────────────────',
+            '## 🔧 命令清单',
+            '──────────────────────────────────────────────────────────',
+            '',
+            '  weave_run_graph [path=<yaml>] user_input=<需求> [output_dir=]',
+            '                                   启动图执行。**path 可省略**（用内置默认图）。',
+            '  weave_graph_validate [path=<yaml>]   校验图（path 可省略）',
+            '  weave_graph_show [path=<yaml>]       显示 ASCII 图结构（path 可省略）',
+            '  weave_graph_init [filename=] [force=]',
+            '                                   生成默认图 YAML 模板（自定义图入口）',
+            '  weave_graph_status                   查看最近一次执行状态',
+            '  weave_graph_tail [lines=N]           查看最近一次 trace 事件流',
+            '  weave_graph_resume graph_id=<id> [additional_context=]',
+            '                                   从暂停快照恢复图执行',
+            '',
+            '──────────────────────────────────────────────────────────',
+            '## ⏸ 暂停处理契约（主 agent 必读）',
+            '──────────────────────────────────────────────────────────',
+            '',
+            '收到 graph 暂停时：',
+            '',
+            '✅ 应该做：',
+            '  1. 向用户报告：哪个节点暂停、为什么、建议怎么处理',
+            '  2. 等用户明确指示',
             '  3. 按用户指示调 weave_graph_resume graph_id=<id> [additional_context=...]',
             '',
-            '❌ **禁止做**：',
-            '  1. 不要自动调 weave_run_graph 重跑整个图（会重复消耗 token）',
+            '❌ 禁止做：',
+            '  1. 不要自动 weave_run_graph 重跑整图（重复 token）',
             '  2. 不要猜用户意图直接 resume',
             '  3. 不要忽略暂停继续做别的事',
             '  4. 不要报告"图已完成"',
+          ].join('\n')
+        },
+      }),
+    ),
+  )
+
+  // ─── 4. weave_graph_init ───
+  disposers.push(
+    ctx.tools.register(
+      defineTool({
+        name: 'weave_graph_init',
+        description:
+          '在当前工作目录生成默认图 YAML 模板。**仅在用户明确要求自定义图时使用**；' +
+          '普通需求直接 weave_run_graph user_input=... 即可（不传 path）。',
+        parameters: {
+          filename: { type: 'string', description: `输出文件名（默认 ${DEFAULT_GRAPH_FILENAME}）` },
+          force: { type: 'boolean', description: '覆盖已存在文件（默认 false）' },
+        },
+        output: {
+          schema: { type: 'string' },
+          render(_args, value) {
+            return [{ type: 'text', text: value as string }]
+          },
+        },
+        async execute(args, exec) {
+          const { writeFileSync, existsSync } = await import('node:fs')
+          const { join } = await import('node:path')
+          const workspace = resolveExecWorkspace(exec) ?? process.cwd()
+          const filename = args.filename ?? DEFAULT_GRAPH_FILENAME
+          const target = join(workspace, filename)
+          if (existsSync(target) && args.force !== true) {
+            return `⚠ 文件已存在: ${target}\n加 force=true 覆盖`
+          }
+          writeFileSync(target, DEFAULT_GRAPH_YAML, 'utf8')
+          return [
+            `✅ 默认图模板已生成: ${target}`,
             '',
-            '**为什么**：重跑会重复消耗 token；用户明确要求"从断点继续"。',
+            '编辑后使用:',
+            `  weave_graph_validate path=${filename}`,
+            `  weave_run_graph path=${filename} user_input="..."`,
+            '',
+            '⚠ 三条铁律（违反必失败）：',
+            '  ① 不要写 artifactName（角色 YAML 已声明）',
+            '  ② 节点 id 用有意义的词（requirement 不是 r1）',
+            '  ③ version/graphVersion 用字符串（"1" 不是 1）',
           ].join('\n')
         },
       }),

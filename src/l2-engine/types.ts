@@ -147,6 +147,7 @@ export type PauseReason =
   | 'user-pause' | 'approval-pending' | 'permission-denied'
   | 'dependency-missing' | 'budget-exceeded'
   | 'tool-error-retryable' | 'tool-error-fatal' | 'timeout'
+  | 'awaiting-user-input'   // ★ Bugs-V5：节点主动 ask_user 触发的暂停
 
 /** ★ 问题五：暂停快照（节点失败/需人工介入时落盘，供 weave_graph_resume 恢复）。 */
 export interface PauseSnapshot<T> {

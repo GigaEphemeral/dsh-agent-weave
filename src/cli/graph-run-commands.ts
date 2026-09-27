@@ -17,7 +17,8 @@ import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { loadGraphSpec, resolveExecWorkspace } from './graph-commands.js'
-import { computeGraphSchemaHash } from '../l2-engine/graph-definition.js'
+import { computeGraphSchemaHash, parseGraphDefinitionYaml } from '../l2-engine/graph-definition.js'
+import { DEFAULT_GRAPH_YAML, isPlaceholderHash } from '../l2-engine/default-graph.js'
 import { validateGraph } from '../l2-engine/static-validator.js'
 import { createStateGraph, SKIP } from '../l2-engine/state-graph.js'
 import { evaluateCondition } from '../l2-engine/condition-edge.js'
@@ -63,6 +64,25 @@ export async function runGraphRealTool(
     signal?: AbortSignal,
     rolesDir?: string,
 ) {
+  const roles = rolesDir ? loadRoleDefinitions(rolesDir) : []
+
+  // ★ Bugs-v3 修复2a：占位 hash 自动重算（graphSchemaHash: "placeholder" → 真实值）
+  if (isPlaceholderHash(spec.graphSchemaHash)) {
+    const realHash = computeGraphSchemaHash(spec)
+    ;(spec as { graphSchemaHash: string }).graphSchemaHash = realHash
+    ctx.logger.info('weave', 'graphSchemaHash 自动重算', { realHash })
+  }
+
+  // ★ Bugs-v3 修复2b：artifactName 优先级链（YAML > role_boundary > <nodeId>.md）
+  // 并把解析结果写回 spec，供 resume 时复用
+  for (const node of spec.nodes) {
+    if (node.nodeType === 'role' && node.roleRef && !node.artifactName) {
+      const role = roles.find((r) => r.id === node.roleRef)
+      const resolved = role?.role_boundary?.artifact?.name ?? `${node.id}.md`
+      ;(node as { artifactName?: string }).artifactName = resolved
+    }
+  }
+
   const validation = validateGraph(spec, { registeredRoles: new Set(ctx.subagents.list()) })
   if (!validation.valid) {
     return {
@@ -96,7 +116,7 @@ export async function runGraphRealTool(
 
   // 问题四：从角色 YAML 的 quality_gate 接入节点产物验证（产物空 → 整图停）
   // rolesDir 由 index.ts 单一真相源传入；未传则降级为不加载 quality_gate（不崩）
-  const roles = rolesDir ? loadRoleDefinitions(rolesDir) : []
+  // （roles 已在函数开头加载，供 hash 重算 + artifactName 优先级链）
 
   // ★ v2.0 Phase D：默认 inputGate——从 seq 边推导上游（缺省即要求上游产物非空）
   const seqUpstreamByNode = new Map<string, string[]>()
@@ -117,6 +137,8 @@ export async function runGraphRealTool(
         // P4.0.6：artifactName 支持（缺省 <nodeId>.md）
         artifactName: node.artifactName ?? `${node.id}.md`,
         role: node.roleRef,
+        // ★ Bugs-v3 修复2c：传 workspace（相对路径 + 多候选查找）
+        ...(workspace !== undefined ? { workspace } : {}),
         ...(node.promptTemplate !== undefined ? { promptTemplate: node.promptTemplate } : {}),
         ...(role && role.quality_gate.length > 0 ? { qualityGate: role.quality_gate } : {}),
         // v2.0 Phase C：角色定义（Prompt 边界块注入）
@@ -232,24 +254,34 @@ export function registerGraphRunCommand(
       defineTool({
         name: 'weave_run_graph',
         description:
-            '启动图执行（**异步**）：读用户 YAML 图 DSL → 按 roleRef 流转真实子代理 → **立即返回 graphId**。' +
-            '图在后台跑，前端看板经 graphId 订阅实时进展。' +
-            '参数 path=图YAML, user_input=需求, output_dir=可选产物目录。返回值 status="started" 表示图已启动未完成。' +
-            '\n\n★ user_input 传参规范：' +
-            '**只传用户需求内容本身**（如"创建一个纯前端五子棋游戏：1. 15×15 棋盘...7. 界面简洁"）。' +
-            '**不要传**"请按图链依次完成需求分析、架构设计、开发实现..."之类的执行指令——' +
-            '图链的执行逻辑由图 DSL 定义，每个角色只做自己的职责，user_input 只作为原始需求注入。' +
-            '若把整链任务写进 user_input，会导致 R1 越权做 R2/R4/R6 的活。' +
-            '\n\n注意：① 禁止探测插件源码来理解工具——以 weave_graph_help 与参数描述为准；' +
-            '② 图启动后向用户报告 graphId，不要等图跑完；③ 若图运行中出错/暂停，先调 weave_graph_help 查看处理办法（weave_graph_resume）。',
+            '启动图执行（**异步**），立即返回 graphId。' +
+            '\n\n★★★ 99% 情况只需传 user_input，**不要传 path** ★★★' +
+            '\n- ✅ 正确：weave_run_graph user_input="<用户需求原话>"' +
+            '\n- ❌ 错误：找 YAML 示例/读 README/读 workflows/读 roles → 自己写 YAML → 再调用' +
+            '\n\n【内置默认图（不传 path 时自动使用）】' +
+            '\n六角色串行链：R1 需求 → R2 架构 → R4 设计 → R6 开发 → R7 测试 → R8 质量。' +
+            '\n\n【只有用户明确要求自定义图时才用 path】' +
+            '\n1. weave_graph_init 生成模板 → 2. 编辑 → 3. weave_run_graph path=<yaml> user_input="..."' +
+            '\n\n【禁止行为】' +
+            '\n- ❌ 读 README / docs / workflows / roles 找图格式' +
+            '\n- ❌ Glob **/*.yaml 找示例' +
+            '\n- ❌ 调用 weave_graph_validate / weave_graph_show 校验默认图（自动校验）' +
+            '\n\n【user_input 传参规范】' +
+            '\n只传**用户需求内容本身**。不要传"请按图链依次完成..."之类的执行指令。' +
+            '\n\n【启动后】立即向用户报告 graphId；出错/暂停时先调 weave_graph_help。',
         parameters: {
-          path: { type: 'string', required: true, description: '图 YAML 文件路径' },
+          path: {
+            type: 'string',
+            description:
+              '【默认不要传】图 YAML 路径。**省略时自动使用内置默认六角色图**。' +
+              '仅在用户明确要求自定义图时才传。',
+          },
           user_input: { type: 'string', required: true, description: '用户一句话需求' },
-          output_dir: { type: 'string', description: '可选产物目录（默认 <cwd>/productions）' },
+          output_dir: { type: 'string', description: '可选产物目录（默认 <workspace>/productions）' },
           initial_state: {
             type: 'object',
             additionalProperties: true,
-            description: '初始状态字段（可选，覆盖默认 messages/retry_count 等）',
+            description: '初始状态字段（可选）',
           },
         },
         output: {
@@ -261,7 +293,20 @@ export function registerGraphRunCommand(
         async execute(args, exec) {
           // 问题 3：图路径与产物默认基准用会话工作区（非 process.cwd()）
           const workspace = resolveExecWorkspace(exec)
-          const spec = loadGraphSpec(args.path, workspace)
+          // ★ Bugs-v3 修复2d：path 可选（省略 → 内置默认图）
+          let spec: GraphDefinitionSpec
+          let sourceDesc: string
+          if (args.path) {
+            spec = loadGraphSpec(args.path, workspace)
+            sourceDesc = `自定义图: ${args.path}`
+          } else {
+            spec = parseGraphDefinitionYaml(DEFAULT_GRAPH_YAML, '<builtin-default>')
+            sourceDesc = '<builtin-default>（内置六角色串行图 R1→R2→R4→R6→R7→R8）'
+            ctx.logger.info('weave', '使用内置默认图（未传 path）', {
+              entryPoint: spec.entryPoint,
+              nodes: spec.nodes.map((n) => n.id),
+            })
+          }
           const r = await runGraphRealTool(
               ctx,
               spec,
@@ -276,6 +321,7 @@ export function registerGraphRunCommand(
           return [
             `✅ ${r.message}`,
             `图 ID: ${r.graphId}`,
+            `图来源: ${sourceDesc}`,
             `产物目录: ${r.artifactsRoot}`,
             `进度 trace: ${r.tracesDir}/graph-*.jsonl（tail 观测：Get-Content -Wait）`,
             `（图在后台异步执行，前端看板经 graphId 订阅实时进展）`,

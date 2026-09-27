@@ -10,7 +10,8 @@ import { registerVisualCommands } from './cli/graph-visual-commands.js'
 import { registerGraphRunCommand } from './cli/graph-run-commands.js'
 import { registerGraphResumeCommand } from './cli/graph-resume-commands.js'
 import { registerPublishFindingTool } from './l2-engine/publish-finding-tool.js'
-import { getCurrentNodeCtx } from './l2-engine/state-graph.js'
+import { getCurrentNodeCtx, getAskUserContext } from './l2-engine/state-graph.js'
+import { registerAskUserTool } from './l2-engine/ask-user-tool.js'
 import { GraphEngineService } from './l2-engine/graph-service.js'
 import { registerVisualRuntime } from './l4-visual/host/visual-runtime.js'
 import { logger } from './shared/logger.js'
@@ -134,6 +135,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   registerGraphResumeCommand(ctx)
   // ★ v2.0 Phase E：publish_finding 工具（共享发现池）
   registerPublishFindingTool(ctx, () => getCurrentNodeCtx())
+  // ★ Bugs-V5：ask_user 工具（subagent 主动暂停问用户）
+  registerAskUserTool(ctx, getAskUserContext())
 
   ctx.plugin(GraphEngineService, {
     defaultMaxIterations: 25,
