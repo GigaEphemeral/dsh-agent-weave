@@ -348,7 +348,6 @@ export function registerVisualRoutes(
           json(res, 409, { error: '任务缺少 parent agent（请由主 agent 发起启动）' })
           return
         }
-        const started = updateTask(taskId, { status: 'running', startedAt: Date.now() })
         const { runGraphRealTool } = await import('../../cli/graph-run-commands.js')
         try {
           const result = await runGraphRealTool(
@@ -358,14 +357,24 @@ export function registerVisualRoutes(
             task.parentAgent as never,
             task.outputDir,
           )
-          updateTask(taskId, { graphId: result.graphId, status: 'running' })
+          // 功能问题2 P0-4：检查 result.ok（图校验失败是返回 ok:false，不抛错）
+          if (!result.ok) {
+            updateTask(taskId, { status: 'failed', error: result.message })
+            json(res, 400, { ok: false, error: result.message })
+            return
+          }
+          if (!result.graphId) {
+            updateTask(taskId, { status: 'failed', error: '内部错误：graphId 为空' })
+            json(res, 500, { ok: false, error: '内部错误：graphId 为空' })
+            return
+          }
+          updateTask(taskId, { graphId: result.graphId, status: 'running', startedAt: Date.now() })
           json(res, 200, { ok: true, taskId, graphId: result.graphId, status: 'running' })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           updateTask(taskId, { status: 'failed', error: message })
           json(res, 500, { ok: false, error: message })
         }
-        void started
         return
       }
 

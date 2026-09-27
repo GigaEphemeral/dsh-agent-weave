@@ -1,7 +1,8 @@
 /**
  * 看板工具栏（MVP-5B UI 重构）：状态标题 + 按 phase 的上下文按钮。
+ * 功能问题2 P2-9：角色未注册时禁用【开始工作】。
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { CurrentTask, TaskPhase } from '../state/board-state.js'
 import { setActiveTab, setCurrentTask, clearTask } from '../state/board-state.js'
 
@@ -18,7 +19,26 @@ const TITLES: Record<TaskPhase, string> = {
 
 export function BoardToolbar({ task }: { task: CurrentTask }) {
   const [loading, setLoading] = useState<string | null>(null)
+  const [rolesReady, setRolesReady] = useState(true)
   const phase = task.phase
+
+  // 功能问题2 P2-9：轮询角色是否注册（未注册禁用开始；角色加载是异步的）
+  useEffect(() => {
+    let cancelled = false
+    const check = (): void => {
+      fetch('/api/weave/roles')
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d) => {
+          if (cancelled) return
+          const arr = Array.isArray(d) ? d : ((d as { roles?: unknown[] }).roles ?? [])
+          setRolesReady(arr.length > 0)
+        })
+        .catch(() => {})
+    }
+    check()
+    const t = setInterval(check, 2000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [])
 
   const call = async (action: string, fn: () => Promise<void>): Promise<void> => {
     setLoading(action)
@@ -36,8 +56,10 @@ export function BoardToolbar({ task }: { task: CurrentTask }) {
     if (!task.taskId) return
     const r = await fetch(`/api/weave/tasks/${task.taskId}/start`, { method: 'POST' })
     const d = await r.json() as { ok?: boolean; error?: string; graphId?: string }
-    if (!d.ok) { window.alert(d.error ?? '启动失败'); return }
-    setCurrentTask({ phase: 'running', graphId: d.graphId ?? null })
+    // 功能问题2 P0-4：三重检查（HTTP + 业务 + graphId）
+    if (!r.ok || d.ok === false) { window.alert(`启动失败：${d.error ?? `HTTP ${r.status}`}`); return }
+    if (!d.graphId) { window.alert('启动失败：后端未返回 graphId'); return }
+    setCurrentTask({ phase: 'running', graphId: d.graphId })
   })
 
   const handlePause = () => call('pause', async () => {
@@ -68,14 +90,14 @@ export function BoardToolbar({ task }: { task: CurrentTask }) {
     window.dispatchEvent(new CustomEvent('weave:save-graph'))
   })
 
-  const buttons: Array<{ id: string; label: string; kind?: 'primary' | 'danger'; onClick: () => void }> = []
+  const buttons: Array<{ id: string; label: string; kind?: 'primary' | 'danger'; onClick: () => void; disabled?: boolean }> = []
   if (phase === 'idle') {
     buttons.push({ id: 'new', label: '新建任务', kind: 'primary', onClick: handleNew })
   } else if (phase === 'editing') {
     buttons.push(
       { id: 'cancel', label: '取消', onClick: handleCancel },
       { id: 'save', label: '保存图', onClick: handleSaveGraph },
-      { id: 'start', label: '开始工作', kind: 'primary', onClick: handleStart },
+      { id: 'start', label: '开始工作', kind: 'primary', onClick: handleStart, disabled: !rolesReady },
     )
   } else if (phase === 'running') {
     buttons.push(
@@ -116,7 +138,8 @@ export function BoardToolbar({ task }: { task: CurrentTask }) {
             key={b.id}
             className={`btn${b.kind ? ' ' + b.kind : ''}`}
             onClick={b.onClick}
-            disabled={loading !== null}
+            disabled={loading !== null || b.disabled === true}
+            title={b.disabled ? '角色注册中，请稍候' : undefined}
           >
             {b.label}
           </button>

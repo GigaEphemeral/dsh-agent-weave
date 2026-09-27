@@ -82,6 +82,41 @@ export function CanvasEditor({ initialGraph, onGraphChange, readonly = false, li
   const [linking, setLinking] = useState<{ fromId: string; mx: number; my: number } | null>(null)
   const [dropIndicator, setDropIndicator] = useState<{ x: number; y: number } | null>(null)
   const innerRef = useRef<HTMLDivElement>(null)
+  // 功能问题2 P0-3：initialGraph 变更同步（防异步加载的图不显示）
+  const initialKeyRef = useRef<string>('')
+
+  // 功能问题2 P0-3：initialGraph 变化时同步（首次异步加载后填充；同图不覆盖，避免用户编辑被冲）
+  useEffect(() => {
+    if (!initialGraph) return
+    const key = `${initialGraph.entryPoint}|${initialGraph.nodes.length}|${initialGraph.edges.length}`
+    if (initialKeyRef.current === key) return
+    initialKeyRef.current = key
+    const nextNodes: EditorNode[] = (initialGraph.nodes ?? []).map((n, i) => {
+      const node: EditorNode = {
+        id: n.id,
+        roleRef: n.roleRef ?? n.id,
+        roleName: n.roleRef ?? n.id,
+        x: (i % 3) * (NODE_W + COL_X),
+        y: Math.floor(i / 3) * (NODE_H + ROW_Y),
+      }
+      if (n.artifactName !== undefined) node.artifactName = n.artifactName
+      if (n.override !== undefined) node.override = (n.override as unknown as EditorNode['override'])!
+      return node
+    })
+    setNodes(nextNodes)
+    const nextEdges: EditorEdge[] = (initialGraph.edges ?? []).filter((e) => e.type === 'seq' || e.type === 'cond' || e.type === 'loop').map((e, i) => {
+      const edge: EditorEdge = {
+        id: `e-${i}-${e.from}-${e.to}`,
+        from: e.from,
+        to: e.to,
+        type: (e.type === 'cond' || e.type === 'loop' ? e.type : 'seq') as EditorEdge['type'],
+      }
+      if (e.when !== undefined) edge.when = e.when
+      if (e.maxIter !== undefined) edge.maxIter = e.maxIter
+      return edge
+    })
+    setEdges(nextEdges)
+  }, [initialGraph])
 
   // MVP-5B B6：角色库候选（节点编辑器 roleRef 下拉，动态拉取不硬编码）
   useEffect(() => {

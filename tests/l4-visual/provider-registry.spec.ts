@@ -53,8 +53,8 @@ describe('probeProviders', () => {
   it('dynamic：从 ctx.subagents 反射（source=dynamic，最可信）', () => {
     const ctx = makeCtx({
       providers: [
-        { name: 'R1-requirement', agentRouteDefaults: { provider: 'acme', model: 'acme-model-1' } },
-        { name: 'R2-architect', agentRouteDefaults: { provider: 'acme', model: 'acme-model-2' } },
+        { name: 'spawn', agentRouteDefaults: { provider: 'acme', model: 'acme-model-1' } },
+        { name: 'fork', agentRouteDefaults: { provider: 'acme', model: 'acme-model-2' } },
       ],
     })
     const r = probeProviders(ctx)
@@ -64,6 +64,18 @@ describe('probeProviders', () => {
     expect(acme?.models).toEqual(['acme-model-1', 'acme-model-2'])
     expect(acme?.defaultModel).toBe('acme-model-1')
     expect(r.probedAt).toBeTypeOf('number')
+  })
+
+  it('功能问题2 P1-7：角色名 provider 被排除（角色不是 LLM provider）', () => {
+    const ctx = makeCtx({
+      providers: [
+        { name: 'R1-requirement', agentRouteDefaults: { provider: 'acme', model: 'acme-model-1' } },
+        { name: 'spawn', agentRouteDefaults: { provider: 'acme', model: 'acme-model-1' } },
+      ],
+    })
+    const r = probeProviders(ctx)
+    const acme = r.providers.find((p) => p.id === 'acme')
+    expect(acme?.models).toEqual(['acme-model-1']) // 只有 spawn 贡献
   })
 
   it('无 dynamic → yaml-scan 聚合 roles/*.yaml', () => {
@@ -89,7 +101,7 @@ describe('probeProviders', () => {
       setRolesDir(dir)
       // acme 在 dynamic 中只有 model-1；yaml-scan 又出现 acme-model-1 → 不重复
       const ctx = makeCtx({
-        providers: [{ name: 'R1-requirement', agentRouteDefaults: { provider: 'acme', model: 'acme-model-1' } }],
+        providers: [{ name: 'spawn', agentRouteDefaults: { provider: 'acme', model: 'acme-model-1' } }],
       })
       const r = probeProviders(ctx)
       const acme = r.providers.find((p) => p.id === 'acme')

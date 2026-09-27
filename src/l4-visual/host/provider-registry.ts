@@ -41,14 +41,20 @@ interface ProviderLike {
   agentRouteDefaults?: { provider?: string; model?: string }
 }
 
-/** 从 ctx.subagents 反射已注册 provider（dynamic）。 */
+/** 从 ctx.subagents 反射已注册 provider（dynamic；功能问题2 P1-7：排除角色 provider）。 */
 function probeDynamic(ctx: Context): ProviderInfo[] {
   try {
     const list = ctx.subagents?.list?.()
     if (!Array.isArray(list) || list.length === 0) return []
+    // ★ 排除已注册角色（角色本身是 provider，但不是 LLM provider）
+    let roleIds = new Set<string>()
+    try {
+      roleIds = new Set(loadRoleDefinitions(getRolesDir()).map((r) => r.id))
+    } catch { /* 忽略 */ }
+
     const map = new Map<string, ProviderInfo>()
     for (const name of list) {
-      if (!name) continue
+      if (!name || roleIds.has(name)) continue // ★ 跳过角色
       const provider = ctx.subagents?.getProvider?.(name) as ProviderLike | undefined
       const route = provider?.agentRouteDefaults
       const id = route?.provider ?? name

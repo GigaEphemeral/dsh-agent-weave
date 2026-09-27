@@ -143,11 +143,9 @@ export function NodeEditorModal({
           </div>
 
           <div className="field">
-            <label>输出约束</label>
-            <label className="checkbox"><input type="checkbox" checked={draft.onlyMarkdown ?? false}
-              onChange={(e) => setDraft({ ...draft, onlyMarkdown: e.target.checked })} /> 仅 .md</label>
-            <label className="checkbox"><input type="checkbox" checked={draft.approval ?? false}
-              onChange={(e) => setDraft({ ...draft, approval: e.target.checked })} /> 需用户审批</label>
+            <label>审批（override.approval）</label>
+            <label className="checkbox"><input type="checkbox" checked={draft.override?.approval ?? false}
+              onChange={(e) => setOverride({ approval: e.target.checked })} /> 需用户审批</label>
           </div>
         </div>
 

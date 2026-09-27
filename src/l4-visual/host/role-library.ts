@@ -50,6 +50,9 @@ export interface RoleLibraryEntry {
   produces?: RoleDefinition['produces'] | undefined
   /** ui修复2：输入声明（consumes/requires）。 */
   input?: RoleDefinition['input'] | undefined
+  /** 功能问题2 P0-1：provider/model（编辑已有角色时回填）。 */
+  provider?: string | undefined
+  model?: string | undefined
 }
 
 /** 将 RoleDefinition 转为角色库展示条目。 */
@@ -64,6 +67,8 @@ export function toRoleEntry(role: RoleDefinition): RoleLibraryEntry {
     tools: [...role.tools],
     ...(role.produces !== undefined ? { produces: role.produces } : {}),
     ...(role.input !== undefined ? { input: role.input } : {}),
+    provider: role.model.provider,
+    model: role.model.model,
   }
 }
 
@@ -129,6 +134,8 @@ export interface SaveRoleResult {
   id?: string
   path?: string
   error?: string
+  /** P3-12：Zod 字段化错误（前端可高亮对应字段）。 */
+  fields?: Array<{ field: string; message: string }>
 }
 
 /** 从编辑器表单构造合法 RoleDefinition（缺省字段给默认值）。 */
@@ -147,8 +154,9 @@ function buildRoleDefinition(form: RoleFormInput): RoleDefinition {
     capabilities: form.capabilities ?? [],
     tools: form.tools ?? [],
     model: {
-      provider: form.provider ?? 'spawn',
-      model: form.model ?? 'default',
+      // 功能问题2 P1-5：空字符串也回退（?? 不处理 ''）
+      provider: (form.provider ?? '').trim() || 'spawn',
+      model: (form.model ?? '').trim() || 'default',
     },
     memory_scope: 'private',
     lifecycle: 'on-demand',
@@ -185,8 +193,16 @@ export function saveRoleDefinition(form: RoleFormInput): SaveRoleResult {
     const role = buildRoleDefinition(form)
     const parsed = RoleDefinitionSchema.safeParse(role)
     if (!parsed.success) {
-      const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')
-      return { ok: false, error: `角色定义校验失败: ${issues}` }
+      // P3-12：Zod 错误字段化
+      const fields = parsed.error.issues.map((i) => ({
+        field: i.path.join('.') || '$',
+        message: i.message,
+      }))
+      return {
+        ok: false,
+        error: `角色定义校验失败（${fields.length} 处）: ${fields.map((f) => `${f.field}: ${f.message}`).join('; ')}`,
+        fields,
+      }
     }
     const yaml = `# ${role.name}（由角色编辑器创建）\n` + yamlDump(role, { noRefs: true, lineWidth: 120 })
     mkdirSync(dir, { recursive: true })

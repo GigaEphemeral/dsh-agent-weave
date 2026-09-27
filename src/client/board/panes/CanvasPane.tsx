@@ -18,7 +18,7 @@ export function CanvasPane({ task }: { task: CurrentTask }) {
   const { snap } = useGraphStream(task.graphId)
   const activity = useActivityFeed(task.graphId)
 
-  // 加载当前草稿图（taskId 优先；否则从 localStorage 恢复）
+  // 加载当前草稿图（功能问题2 P1-6：本地草稿优先，服务器 graph 兜底）
   useEffect(() => {
     if (!task.taskId) return
     const load = (): void => {
@@ -27,7 +27,15 @@ export function CanvasPane({ task }: { task: CurrentTask }) {
     }
     fetch(`/api/weave/tasks/${task.taskId}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d?.graph) setDraft(d.graph); else load() })
+      .then((d) => {
+        // ★ 本地草稿优先（用户编辑过的，不被初始模板覆盖）
+        const local = getGraphDraft(task.taskId as string)
+        if (local?.spec) {
+          setDraft(local.spec as ClientGraphSpec)
+        } else if (d?.graph) {
+          setDraft(d.graph)
+        }
+      })
       .catch(load)
   }, [task.taskId])
 

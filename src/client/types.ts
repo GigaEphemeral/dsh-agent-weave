@@ -7,7 +7,7 @@
 export interface ClientGraphSpec {
   entryPoint: string
   maxIterations?: number
-  nodes: Array<{ id: string; roleRef?: string; nodeType: string; artifactName?: string; inputGate?: { requires: string[] }; override?: unknown }>
+  nodes: Array<{ id: string; roleRef?: string; nodeType: string; artifactName?: string; inputGate?: { requires: string[] }; override?: object }>
   edges: Array<{ from: string; to: string; type: string; when?: string; maxIter?: number }>
 }
 

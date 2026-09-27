@@ -35,7 +35,7 @@ import { mergeState } from './atomic-merge.js'
 import { createQueueingCounter } from './concurrency-counter.js'
 import { edgeKey, resolveNextNode } from './condition-edge.js'
 import { validateNodeOutput } from './node-validator.js'
-import { getGraphControl, clearGraphControl } from './graph-control.js'
+import { getGraphControl, clearGraphControl, subscribeControl } from './graph-control.js'
 import { classifyError } from './error-classifier.js'
 import { writePauseSnapshot } from './pause-snapshot.js'
 import { ProjectMemory } from './project-memory.js'
@@ -56,6 +56,19 @@ function safeProviderList(ctx: Context): string[] {
   } catch {
     return []
   }
+}
+
+/** 功能问题2 P1-8：合并两个 AbortSignal（任一中止即中止）。 */
+function mergeAbort(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {
+  if (!a) return b
+  const ctl = new AbortController()
+  const onAbort = (): void => ctl.abort()
+  if (a.aborted || b.aborted) ctl.abort()
+  else {
+    a.addEventListener('abort', onAbort, { once: true })
+    b.addEventListener('abort', onAbort, { once: true })
+  }
+  return ctl.signal
 }
 
 /** 循环回退反馈（问题三预留：基于当前状态向原子代理说明为何打回）。 */
@@ -385,37 +398,47 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
           // ★ 步骤3：新 waiter 订阅活动 → 转发 graph/node-activity / idle-warning / loop-detected
           // （问题三 A3：无硬超时；A4/A5：中止 → interrupt；D2/D3：循环/空闲仅提示）
-          result = await waitForSubagentEnd(nodeCtx.ctx, activeChildId, {
-            ...(signal !== undefined ? { signal } : {}),
-            parentAgent: agent, // 关键：父 Agent 作 interrupt authority（A5）
-            onActivity: (activity) => {
-              nodeCtx.emit({
-                type: 'graph/node-activity',
-                graphId: nodeCtx.graphId,
-                node: name,
-                timestamp: Date.now(),
-                data: { childId: activeChildId, ...activity },
-              })
-            },
-            onIdleWarning: (idleMs) => {
-              nodeCtx.emit({
-                type: 'graph/node-idle-warning',
-                graphId: nodeCtx.graphId,
-                node: name,
-                timestamp: Date.now(),
-                data: { childId: activeChildId, idleMs },
-              })
-            },
-            onLoopDetected: (tool, repeatCount) => {
-              nodeCtx.emit({
-                type: 'graph/node-loop-detected',
-                graphId: nodeCtx.graphId,
-                node: name,
-                timestamp: Date.now(),
-                data: { childId: activeChildId, tool, repeatCount },
-              })
-            },
+          // 功能问题2 P1-8：暂停/终止 → 订阅 graph-control → 中止运行中子代理（interrupt）
+          const controlAbort = new AbortController()
+          const unsubControl = subscribeControl(nodeCtx.graphId, (action) => {
+            if (action === 'pause' || action === 'stop') controlAbort.abort()
           })
+          try {
+            result = await waitForSubagentEnd(nodeCtx.ctx, activeChildId, {
+              // 合并外部 signal 与控制 signal（任一中止即中止）
+              signal: mergeAbort(signal, controlAbort.signal),
+              parentAgent: agent, // 关键：父 Agent 作 interrupt authority（A5）
+              onActivity: (activity) => {
+                nodeCtx.emit({
+                  type: 'graph/node-activity',
+                  graphId: nodeCtx.graphId,
+                  node: name,
+                  timestamp: Date.now(),
+                  data: { childId: activeChildId, ...activity },
+                })
+              },
+              onIdleWarning: (idleMs) => {
+                nodeCtx.emit({
+                  type: 'graph/node-idle-warning',
+                  graphId: nodeCtx.graphId,
+                  node: name,
+                  timestamp: Date.now(),
+                  data: { childId: activeChildId, idleMs },
+                })
+              },
+              onLoopDetected: (tool, repeatCount) => {
+                nodeCtx.emit({
+                  type: 'graph/node-loop-detected',
+                  graphId: nodeCtx.graphId,
+                  node: name,
+                  timestamp: Date.now(),
+                  data: { childId: activeChildId, tool, repeatCount },
+                })
+              },
+            })
+          } finally {
+            unsubControl()
+          }
         } catch (error) {
           // 问题 2 定位日志②：start 抛错（区分"没调到 delegate"）
           logger.error('weave-addsubagent', '子代理启动/执行抛错', error instanceof Error ? error : new Error(String(error)), {

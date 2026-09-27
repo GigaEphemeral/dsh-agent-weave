@@ -127,8 +127,9 @@ export function RoleEditor({ roleId, onClose, onSaved }: RoleEditorProps) {
           description: String(hit.description ?? ''),
           order: typeof hit.order === 'number' ? hit.order : 10,
           tags: Array.isArray(hit.tags) ? (hit.tags as string[]).join(',') : '',
-          provider: '',
-          model: '',
+          // 功能问题2 P0-1：从后端加载 provider/model（不再硬编码空）
+          provider: String(hit.provider ?? ''),
+          model: String(hit.model ?? ''),
           capabilities: Array.isArray(hit.capabilities) ? (hit.capabilities as string[]).map(String) : [],
           tools: Array.isArray(hit.tools) ? (hit.tools as string[]).map(String) : [],
           readable: '', inputRequires: '', onlyMarkdown: true, forbidExtensions: '', requiredSections: '', forbidden: '',
@@ -144,7 +145,19 @@ export function RoleEditor({ roleId, onClose, onSaved }: RoleEditorProps) {
 
   const selectedProvider = providers.find((p) => p.id === form.provider)
 
+  // 功能问题2 P0-2：本地校验（提交前拦）
+  const validateLocal = (): string | null => {
+    if (!form.id.trim()) return '角色 ID 不能为空'
+    if (!form.name.trim()) return '名称不能为空'
+    if (!form.provider.trim()) return '请选择 Provider'
+    if (!form.model.trim()) return '请选择模型'
+    return null
+  }
+
   const save = async (): Promise<void> => {
+    const localErr = validateLocal()
+    if (localErr) { setError(localErr); return }
+
     setSaving(true)
     setError('')
     try {
@@ -170,15 +183,16 @@ export function RoleEditor({ roleId, onClose, onSaved }: RoleEditorProps) {
           produces: form.produces,
         }),
       })
+      // 功能问题2 P0-2：双检查（HTTP 状态 + 业务状态）
       const d = (await r.json()) as { ok?: boolean; error?: string }
-      if (!d.ok) {
-        setError(d.error ?? '保存失败')
+      if (!r.ok || d.ok === false) {
+        setError(d.error ?? `保存失败（HTTP ${r.status}）`)
         return
       }
       onSaved?.()
       onClose()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError('网络错误：' + (e instanceof Error ? e.message : String(e)))
     } finally {
       setSaving(false)
     }
@@ -244,7 +258,11 @@ export function RoleEditor({ roleId, onClose, onSaved }: RoleEditorProps) {
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
                 <label style={labelStyle}>Provider（数据来源：/api/weave/providers）</label>
-                <select style={inputStyle} value={form.provider} onChange={(e) => set({ provider: e.target.value, model: '' })}>
+                <select style={inputStyle} value={form.provider} onChange={(e) => {
+                  // 功能问题2 P0-2b：选中 provider 自动填默认模型
+                  const pv = providers.find((p) => p.id === e.target.value)
+                  set({ provider: e.target.value, model: pv?.defaultModel ?? '' })
+                }}>
                   <option value="">（请选择）</option>
                   {providers.map((p) => (
                     <option key={p.id} value={p.id}>
