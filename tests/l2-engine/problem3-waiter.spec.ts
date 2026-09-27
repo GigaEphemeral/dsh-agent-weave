@@ -126,8 +126,8 @@ describe('问题三 D1：输入门禁', () => {
     const root = mkdtempSync(join(tmpdir(), 'weave-gate2-'))
     try {
       const { ctx } = mockCtx()
-      // 预置 req 产物文件
-      writeFileSync(join(root, 'req.md'), '内容', 'utf8')
+      // 预置 req 产物文件（≥50 字节，满足 inputGate 阈值）
+      writeFileSync(join(root, 'req.md'), 'x'.repeat(60), 'utf8')
       const g = createStateGraph<Record<string, unknown>>(ctx, 25, 8, root)
       g.addSubagent('dev', { provider: 'R6-developer', artifactName: 'dev.md', inputGate: { requires: ['req'] } })
       g.addEdge('dev', '__END__')

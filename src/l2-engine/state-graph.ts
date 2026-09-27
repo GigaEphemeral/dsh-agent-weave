@@ -19,7 +19,7 @@
  * - S11：无出边发 warning 级 graph/error 事件（不改变成功语义）
  * - S13：node-end 事件携带 inputTokens/outputTokens/cacheReadTokens/tokenUsed/retryCount
  */
-import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {
@@ -39,10 +39,19 @@ import { getGraphControl, clearGraphControl } from './graph-control.js'
 import { classifyError } from './error-classifier.js'
 import { writePauseSnapshot } from './pause-snapshot.js'
 import { waitForSubagentEnd, PauseError } from './subagent-waiter.js'
+import { buildRoleBoundaryBlock } from '../l3-roles/role-prompt.js'
+import { buildUpstreamContextBlocks } from './handoff-extractor.js'
 import type { PauseSnapshot } from './types.js'
 import type { RunLedger, LedgerEventType } from '../l5-observability/run-ledger.js'
 import type { TokenCollector } from '../l5-observability/token-collector.js'
 import { logger } from '../shared/logger.js'
+import { reusableFindingsText } from './findings-pool.js'
+
+/** ★ v2.0 Phase E：当前节点上下文（publish_finding 用；handler 前后设置）。 */
+let currentNodeCtx: { artifactsRoot: string | undefined; graphId: string; nodeId: string } | null = null
+export function getCurrentNodeCtx(): { artifactsRoot: string | undefined; graphId: string; nodeId: string } {
+  return currentNodeCtx ?? { artifactsRoot: undefined, graphId: '', nodeId: '' }
+}
 
 /** 已注册 provider 名列表（安全读取，失败返回空——问题 2 定位日志用）。 */
 function safeProviderList(ctx: Context): string[] {
@@ -78,8 +87,9 @@ function checkInputGate(
       return
     }
     try {
-      if (!existsSync(path) || statSync(path).size === 0) {
-        missing.push(`${reqNode}（产物为空）`)
+      // v2.0：size < 50 视为空（避免"占位 1 字节"假通过）
+      if (!existsSync(path) || statSync(path).size < 50) {
+        missing.push(`${reqNode}（产物为空或过小）`)
       }
     } catch {
       missing.push(`${reqNode}（产物不可读）`)
@@ -90,7 +100,7 @@ function checkInputGate(
   } else if (inputGate.requiresAny && inputGate.requiresAny.length > 0) {
     const anyOk = inputGate.requiresAny.some((n) => {
       const p = artifacts?.[n]
-      return p !== undefined && existsSync(p) && statSync(p).size > 0
+      return p !== undefined && existsSync(p) && statSync(p).size >= 50
     })
     if (!anyOk) missing.push(`requiresAny（均未产出有效产物）`)
   }
@@ -182,6 +192,8 @@ export interface SubagentNodeOptions {
     requires: string[]
     requiresAny?: string[]
   }
+  /** ★ v2.0：角色定义（Prompt 边界块注入 + quality_gate 数据源）。 */
+  roleDefinition?: { id: string; capabilities: string[]; role_boundary?: { responsibilities?: string[]; forbidden?: string[]; artifact?: { name: string; type: string; required_sections: string[] } } }
 }
 
 /** 引擎实例选项。 */
@@ -282,10 +294,29 @@ export function createStateGraph<T extends Record<string, unknown>>(
         if (!agent) throw new Error(`子代理节点 "${name}" 需要 RunOptions.agent（真实 Agent 作 parent）`)
         // 问题三 D1：输入门禁（上游产物存在且非空；缺失 → 抛错 → 图停）
         checkInputGate(options.inputGate, state, name)
+        // ★ v2.0 Phase F：上游产物 handoff 注入（已探测/已决策/遗留 → 下游避免重复探测）
         const upstreamArtifacts = state.artifacts as Record<string, string> | undefined
-        const upstreamSummary = upstreamArtifacts
-          ? Object.entries(upstreamArtifacts).map(([n, p]) => `[${n}] ${p}`).join('\n')
-          : '（无上游产物）'
+        let upstreamSummary = '（无上游产物）'
+        if (upstreamArtifacts && Object.keys(upstreamArtifacts).length > 0) {
+          const blocks: string[] = []
+          for (const [n, p] of Object.entries(upstreamArtifacts)) {
+            let text = ''
+            try {
+              if (existsSync(p) && statSync(p).size < 1_048_576) {
+                text = readFileSync(p, 'utf8')
+              }
+            } catch {
+              // 读取失败仅列路径
+            }
+            if (text.length > 0) {
+              blocks.push(`【上游 ${n} 产物】\n  · 文件: ${p}`)
+              blocks.push(...buildUpstreamContextBlocks(text))
+            } else {
+              blocks.push(`【上游 ${n} 产物】\n  · 路径: ${p}`)
+            }
+          }
+          upstreamSummary = blocks.join('\n')
+        }
         // 通道 C（问题 5）：行为约束——子代理每步输出 [动作]，供观测"在干什么"
         const prompt = (options.promptTemplate ??
           '以 {{provider}} 角色完成任务：\n{{user_input}}\n\n上游产物：\n{{upstream}}\n\n' +
@@ -293,6 +324,14 @@ export function createStateGraph<T extends Record<string, unknown>>(
           .replaceAll('{{provider}}', options.provider)
           .replaceAll('{{user_input}}', String((state.user_input as string | undefined) ?? ''))
           .replaceAll('{{upstream}}', upstreamSummary)
+        // ★ v2.0：Prompt 边界块注入（职责/禁止/产物要求/handoff 模板/探测协作）
+        const boundaryBlock = buildRoleBoundaryBlock(
+          options.roleDefinition as never,
+          options.provider,
+        )
+        // ★ v2.0 Phase E：注入共享发现池（其他节点已探测，避免重复）
+        const findingsText = artifactsRoot ? reusableFindingsText(artifactsRoot, nodeCtx.graphId) : ''
+        const promptWithBoundary = `${prompt}\n\n${boundaryBlock}${findingsText ? `\n\n${findingsText}` : ''}`
         const startAt = Date.now()
         // 问题 2 定位日志①：start 调用前（确认参数与 provider 解析路径）
         logger.info('weave-addsubagent', 'start 调用前', {
@@ -304,7 +343,7 @@ export function createStateGraph<T extends Record<string, unknown>>(
           iteration: nodeCtx.iteration,
           signalAborted: signal?.aborted ?? false,
           registeredProviders: safeProviderList(nodeCtx.ctx),
-          promptLen: prompt.length,
+          promptLen: promptWithBoundary.length,
           existingChildId: childIdByNode.get(name) ?? '',
         })
 
@@ -319,7 +358,7 @@ export function createStateGraph<T extends Record<string, unknown>>(
               provider: options.provider,
               label: `${name}（${options.provider}）`,
               request: {
-                prompt: [{ type: 'text', text: prompt }],
+                prompt: [{ type: 'text', text: promptWithBoundary }],
                 parent: agent as never,
               },
               signal: signal ?? new AbortController().signal,
@@ -668,7 +707,14 @@ export function createStateGraph<T extends Record<string, unknown>>(
           })
 
           const startTime = Date.now()
-          const patch = await handler(state, nodeCtx, options.signal)
+          // ★ v2.0 Phase E：publish_finding 上下文（handler 执行期间可写发现池）
+          currentNodeCtx = { artifactsRoot, graphId, nodeId: current }
+          let patch: Partial<T>
+          try {
+            patch = await handler(state, nodeCtx, options.signal)
+          } finally {
+            currentNodeCtx = null
+          }
 
           // RES.10 §一.2：原子合并 + 冲突检测
           const mergeResult = mergeState(state, patch)

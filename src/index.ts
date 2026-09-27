@@ -9,6 +9,8 @@ import { registerGraphCommands } from './cli/graph-commands.js'
 import { registerVisualCommands } from './cli/graph-visual-commands.js'
 import { registerGraphRunCommand } from './cli/graph-run-commands.js'
 import { registerGraphResumeCommand } from './cli/graph-resume-commands.js'
+import { registerPublishFindingTool } from './l2-engine/publish-finding-tool.js'
+import { getCurrentNodeCtx } from './l2-engine/state-graph.js'
 import { GraphEngineService } from './l2-engine/graph-service.js'
 import { registerVisualRuntime } from './l4-visual/host/visual-runtime.js'
 import { logger } from './shared/logger.js'
@@ -130,6 +132,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   // ★ 关键：把已解析的 rolesDir 传给图执行命令（单一真相源）
   registerGraphRunCommand(ctx, { rolesDir })
   registerGraphResumeCommand(ctx)
+  // ★ v2.0 Phase E：publish_finding 工具（共享发现池）
+  registerPublishFindingTool(ctx, () => getCurrentNodeCtx())
 
   ctx.plugin(GraphEngineService, {
     defaultMaxIterations: 25,

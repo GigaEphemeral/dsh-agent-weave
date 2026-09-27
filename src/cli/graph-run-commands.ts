@@ -27,7 +27,18 @@ import { registerGraph } from '../l4-visual/host/spec-registry.js'
 import { getGlobalTokens } from '../l4-visual/host/visual-runtime.js'
 import { createRunLedger, type RunLedger } from '../l5-observability/run-ledger.js'
 import { loadRoleDefinitions } from '../l3-roles/role-loader.js'
-import type { GraphDefinitionSpec } from '../l2-engine/types.js'
+import type { GraphDefinitionSpec, GraphNodeSpec } from '../l2-engine/types.js'
+
+/** v2.0 Phase D：默认 inputGate——显式配置优先，否则用 seq 上游（空则 undefined）。 */
+function buildDefaultInputGate(
+  node: GraphNodeSpec,
+  seqUpstreamByNode: Map<string, string[]>,
+): { requires: string[] } | undefined {
+  if (node.inputGate !== undefined) return node.inputGate
+  const upstream = seqUpstreamByNode.get(node.id)
+  if (upstream && upstream.length > 0) return { requires: upstream }
+  return undefined
+}
 
 /** 全局 RunLedger（消息流桥接 + 审计；惰性创建）。 */
 let globalLedger: RunLedger | null = null
@@ -87,10 +98,20 @@ export async function runGraphRealTool(
   // rolesDir 由 index.ts 单一真相源传入；未传则降级为不加载 quality_gate（不崩）
   const roles = rolesDir ? loadRoleDefinitions(rolesDir) : []
 
+  // ★ v2.0 Phase D：默认 inputGate——从 seq 边推导上游（缺省即要求上游产物非空）
+  const seqUpstreamByNode = new Map<string, string[]>()
+  for (const edge of spec.edges) {
+    if (edge.type !== 'seq') continue
+    const list = seqUpstreamByNode.get(edge.to) ?? []
+    list.push(edge.from)
+    seqUpstreamByNode.set(edge.to, list)
+  }
+
   // 节点：role → addSubagent；condition/approval → pass-through/门
   for (const node of spec.nodes) {
     if (node.nodeType === 'role' && node.roleRef) {
       const role = roles.find((r) => r.id === node.roleRef)
+      const defaultGate = buildDefaultInputGate(node, seqUpstreamByNode)
       graph.addSubagent(node.id, {
         provider: node.roleRef,
         // P4.0.6：artifactName 支持（缺省 <nodeId>.md）
@@ -98,8 +119,10 @@ export async function runGraphRealTool(
         role: node.roleRef,
         ...(node.promptTemplate !== undefined ? { promptTemplate: node.promptTemplate } : {}),
         ...(role && role.quality_gate.length > 0 ? { qualityGate: role.quality_gate } : {}),
-        // 问题三 D1：透传 inputGate（图 DSL 节点可配置）
-        ...(node.inputGate !== undefined ? { inputGate: node.inputGate } : {}),
+        // v2.0 Phase C：角色定义（Prompt 边界块注入）
+        ...(role !== undefined ? { roleDefinition: role as never } : {}),
+        // 问题三 D1 + v2.0：默认 inputGate（seq 上游），显式配置优先
+        ...(defaultGate !== undefined ? { inputGate: defaultGate } : {}),
       })
     } else if (node.nodeType === 'approval') {
       graph.addApprovalGate(node.id, {
