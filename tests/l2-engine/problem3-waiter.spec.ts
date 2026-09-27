@@ -66,6 +66,19 @@ describe('问题三 A3/A4/A5：waitForSubagentEnd 重设计', () => {
     expect(r.output[0]?.text).toBe('ok')
   })
 
+  it('v2 问题4：stopReason 非 completed → reject（不假完成）', async () => {
+    const { ctx, emit } = mockCtx()
+    const waiter = waitForSubagentEnd(ctx, 'child-1', {})
+    setTimeout(() => emit('subagent/end', { id: 'child-1', stopReason: 'aborted', lastAssistantMessage: [] }), 10)
+    const err = await waiter.then(
+      () => { throw new Error('不应 resolve') },
+      (e) => e,
+    )
+    expect(err).toBeInstanceOf(Error)
+    expect(err.message).toContain('子代理异常结束')
+    expect(err.message).toContain('aborted')
+  })
+
   it('signal abort → interrupt 子代理 + reject PauseError', async () => {
     const { ctx, interrupt } = mockCtx()
     const ctrl = new AbortController()

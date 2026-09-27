@@ -9,8 +9,9 @@ import { useDashboardOpen } from '../state/dashboard-state'
 import { GraphCanvas } from './GraphCanvas'
 import { ControlBar } from './ControlBar'
 import { TokenPanel } from './TokenPanel'
-import { ApprovalPanel } from './ApprovalPanel'
-import { SignalPanel } from './SignalPanel'
+// ★ v2 问题5：审批/观察者面板后端未接入（永远显示 0），删除渲染（文件保留）
+// import { ApprovalPanel } from './ApprovalPanel'
+// import { SignalPanel } from './SignalPanel'
 import { MessageFlowPanel } from './MessageFlowPanel'
 import { NodeActivityPanel } from './NodeActivityPanel'
 import { RunHistoryPanel } from './RunHistoryPanel'
@@ -61,8 +62,9 @@ export function WeaveDashboardView(_owner: ConvViewOwnerProps = {}) {
         <GraphCanvas spec={spec} snap={snap} roleMap={roleMap} onSelectNode={setSelectedNode} />
         <div className="weave-panels" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
           <ErrorBoundary><TokenPanel graphId={graphId} /></ErrorBoundary>
-          <ErrorBoundary><ApprovalPanel graphId={graphId} /></ErrorBoundary>
-          <ErrorBoundary><SignalPanel graphId={graphId} /></ErrorBoundary>
+          {/* ★ v2 问题5：删除审批/观察者面板（后端未接入，永远显示 0） */}
+          {/* <ErrorBoundary><ApprovalPanel graphId={graphId} /></ErrorBoundary> */}
+          {/* <ErrorBoundary><SignalPanel graphId={graphId} /></ErrorBoundary> */}
           <ErrorBoundary><MessageFlowPanel graphId={graphId} /></ErrorBoundary>
           {selectedNode && (
             <ErrorBoundary><NodeActivityPanel graphId={graphId} nodeId={selectedNode} /></ErrorBoundary>

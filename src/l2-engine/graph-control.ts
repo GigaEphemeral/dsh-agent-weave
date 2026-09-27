@@ -1,4 +1,5 @@
 import { PauseError } from './subagent-waiter.js'
+import { logger } from '../shared/logger.js'
 
 /**
  * 内存化图控制（MVP-4 问题四修复 3 + Bugs-V1 §9：AbortController 贯通）。
@@ -34,26 +35,39 @@ export function getGraphControl(graphId: string): GraphControl {
     const state: ControlState = { paused: false, stopped: false, controller: new AbortController(), waiters: [] }
     ctrl = {
       pause: () => {
-        if (state.paused || state.stopped) return
+        if (state.paused || state.stopped) {
+          logger.info('weave-control', 'pause 忽略（已暂停/已终止）', { graphId, paused: state.paused, stopped: state.stopped })
+          return
+        }
         state.paused = true
         // ★ Bugs-V1 §9：pause → PauseError（可恢复；触发 interrupt）
         state.controller.abort(new PauseError('user-pause'))
+        logger.info('weave-control', '⏸ pause 已触发（abort 已发出）', { graphId })
       },
       resume: () => {
-        if (state.stopped) return
+        if (state.stopped) {
+          logger.info('weave-control', 'resume 忽略（已终止）', { graphId })
+          return
+        }
         state.paused = false
         state.controller = new AbortController() // 重置信号
+        const n = state.waiters.length
         for (const w of state.waiters) w()
         state.waiters.length = 0
+        logger.info('weave-control', '▶ resume 已触发', { graphId, releasedWaiters: n })
       },
       stop: () => {
-        if (state.stopped) return
+        if (state.stopped) {
+          logger.info('weave-control', 'stop 忽略（已终止）', { graphId })
+          return
+        }
         state.stopped = true
         state.paused = false
         // ★ Bugs-V1 §9：stop → 普通 Error（终止；触发 interrupt）
         state.controller.abort(new Error('user-stop'))
         for (const w of state.waiters) w()
         state.waiters.length = 0
+        logger.info('weave-control', '⏹ stop 已触发（abort 已发出）', { graphId })
       },
       isPaused: () => state.paused,
       isStopped: () => state.stopped,
@@ -70,10 +84,12 @@ export function getGraphControl(graphId: string): GraphControl {
 
 export function clearGraphControl(graphId: string): void {
   controls.delete(graphId)
+  logger.info('weave-control', 'clearGraphControl', { graphId })
 }
 
 /** 控制当前活跃图（routes 用）。 */
 export function controlActiveGraph(action: 'pause' | 'resume' | 'stop', graphId: string): boolean {
+  logger.info('weave-control', `controlActiveGraph: ${action}`, { graphId })
   const ctrl = getGraphControl(graphId)
   if (action === 'pause') ctrl.pause()
   else if (action === 'resume') ctrl.resume()

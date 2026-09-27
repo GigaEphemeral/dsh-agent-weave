@@ -318,12 +318,30 @@ export function createStateGraph<T extends Record<string, unknown>>(
           upstreamSummary = blocks.join('\n')
         }
         // 通道 C（问题 5）：行为约束——子代理每步输出 [动作]，供观测"在干什么"
-        const prompt = (options.promptTemplate ??
-          '以 {{provider}} 角色完成任务：\n{{user_input}}\n\n上游产物：\n{{upstream}}\n\n' +
-          '【行为约束】每次调用工具前，先输出一行 "[动作] 正在 <做什么>（工具: <toolName>）"，例如 "[动作] 正在搜索相关文件（工具: glob）"。')
+        // ★ v2 问题2 方案B：默认模板强调"单一职责"（防止 R1 越权做 R2/R4/R6 的活）
+        const defaultTemplate = `你是 {{provider}}，请完成下列**单一职责**任务。
+
+【用户原始需求】（这是整个工作流的输入，不是你一个人的任务）
+{{user_input}}
+
+【上游产物】（你只需基于这些内容工作）
+{{upstream}}
+
+【你的任务】
+仅完成 {{provider}} 角色职责范围内的产出。**不要越权做其他角色的工作**。
+例如：你是需求分析师时，只写需求文档，**不要写代码/架构/测试文档**。
+
+【你的产出】
+文件名：{{artifactName}}
+写完即结束，不要在产物外附加说明性文字。
+
+【行为约束】
+每次调用工具前，先输出一行 "[动作] 正在 <做什么>（工具: <toolName>）"。`
+        const prompt = (options.promptTemplate ?? defaultTemplate)
           .replaceAll('{{provider}}', options.provider)
           .replaceAll('{{user_input}}', String((state.user_input as string | undefined) ?? ''))
           .replaceAll('{{upstream}}', upstreamSummary)
+          .replaceAll('{{artifactName}}', options.artifactName ?? `${name}.md`)
         // ★ v2.0：Prompt 边界块注入（职责/禁止/产物要求/handoff 模板/探测协作）
         const boundaryBlock = buildRoleBoundaryBlock(
           options.roleDefinition as never,
@@ -432,6 +450,17 @@ export function createStateGraph<T extends Record<string, unknown>>(
             elapsedMs: Date.now() - startAt,
           })
           throw error
+        }
+
+        // ★ v2 问题4 修法1：双重保险——waitForSubagentEnd 已 reject 非 completed，这里再确认
+        if (result.stopReason !== 'completed') {
+          const err = new Error(`子代理 ${name} 异常结束: stopReason=${result.stopReason}`)
+          logger.warn('weave-addsubagent', '子代理非正常结束，节点失败', {
+            node: name,
+            stopReason: result.stopReason,
+            childId: childIdByNode.get(name) ?? '',
+          })
+          throw err
         }
 
         const text = result.output.map((b) => (b.type === 'text' ? b.text : '')).join('\n').trim()
@@ -837,6 +866,7 @@ export function createStateGraph<T extends Record<string, unknown>>(
           const err = error instanceof Error ? error : new Error(String(error))
           // ★ 问题三 B1/A4+A5 + Bugs-V1 §9.4：用户暂停（PauseError）→ 写快照 + graph/paused
           if (error instanceof PauseError) {
+            logger.info('weave', '图暂停（用户暂停）', { graphId, node: current })
             if (artifactsRoot) {
               try {
                 const snapshot: PauseSnapshot<T> = {
@@ -877,6 +907,7 @@ export function createStateGraph<T extends Record<string, unknown>>(
           }
           // ★ Bugs-V1 §9.4：用户终止（stop）→ graph/end stopped，不写快照
           if (ctrl.isStopped()) {
+            logger.info('weave', '图终止（用户停止）', { graphId, node: current })
             emit({ type: 'graph/end', graphId, node: current, timestamp: Date.now(), data: { stopped: true } })
             clearGraphControl(graphId)
             return {

@@ -27,6 +27,18 @@ function extractOperation(msg: string): string | undefined {
 export function classifyError(error: Error): ErrorClassification {
   const msg = error.message.toLowerCase()
 
+  // ★ v2 问题4 修法3：子代理被 abort（stopReason=aborted 或"异常结束"）
+  if (msg.includes('aborted') || msg.includes('子代理异常结束')) {
+    return {
+      reason: 'tool-error-fatal',
+      needsUserIntervention: true,
+      details: {
+        error: error.message,
+        suggestedAction: '子代理被中断（可能因用户暂停/系统超时）。检查后 resume 恢复，或重跑本节点。',
+      },
+    }
+  }
+
   if (msg.includes('permission') || msg.includes('operation not permitted') || msg.includes('sandbox')) {
     const op = extractOperation(error.message)
     return {

@@ -16,6 +16,8 @@
  * 鉴权：x-weave-token 与 WEAVE_API_TOKEN 比对（P4.B.9）；未配置 env 时放行（本地单机）。
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { unlinkSync } from 'node:fs'
+import { join } from 'node:path'
 import type { SseBroker } from './sse-broker.js'
 import type { ApprovalService } from './approval-service.js'
 import type { TokenCollector } from '../../l5-observability/token-collector.js'
@@ -25,8 +27,8 @@ import { getGraph } from './spec-registry.js'
 import { resolveArtifactsRoot } from './artifacts-root.js'
 import { listRuns, listCheckpoints } from './run-history.js'
 import { readNodeActivity } from './activity-reader.js'
-import { pauseGraph, resumeGraph, stopGraph } from './graph-control.js'
 import { controlActiveGraph } from '../../l2-engine/graph-control.js'
+import { logger } from '../../shared/logger.js'
 
 type Req = { method?: string; url?: string; headers?: Record<string, string | string[] | undefined>; on?: (ev: string, cb: () => void) => unknown }
 type Res = { writeHead(code: number, headers?: Record<string, string>): unknown; end(body?: string): unknown; write?(body: string): boolean }
@@ -70,11 +72,15 @@ export function registerVisualRoutes(
   const disposers: Array<() => void> = []
 
   const handle = (rest: string, req: Req, res: Res): void => {
+    const method = req.method ?? 'GET'
+    // ★ v2 问题3 修法1：每个请求一行 log
+    logger.info('weave-routes', `${method} ${rest}`, { path: rest })
+
     if (!requireAuth(req)) {
+      logger.warn('weave-routes', '鉴权失败', { path: rest })
       json(res, 401, { error: 'unauthorized' })
       return
     }
-    const method = req.method ?? 'GET'
 
     // GET /api/weave/stream —— 全局事件流（★ 问题一步骤2：前端感知新图启动）
     if (rest === '/stream' || rest === '/stream/') {
@@ -129,7 +135,11 @@ export function registerVisualRoutes(
       const lastEventId = req.headers?.['last-event-id']
       const raw = Array.isArray(lastEventId) ? lastEventId[0] : lastEventId
       const subId = broker.subscribe(graphId, res as never, raw)
-      req.on?.('close', () => broker.unsubscribe(subId))
+      logger.info('weave-routes', 'SSE 订阅建立', { graphId, subId })
+      req.on?.('close', () => {
+        broker.unsubscribe(subId)
+        logger.info('weave-routes', 'SSE 订阅断开', { graphId, subId })
+      })
       return
     }
 
@@ -182,15 +192,16 @@ export function registerVisualRoutes(
     }
 
     // POST /graph/:graphId/pause|resume|stop
-    // 问题四修复4：优先内存化图控制（即时响应）；同时写标志文件兼容 chain-runner
+    // ★ v2 问题1 修法2：只走内存控制（触发 abort）；文件层仅 resume 清理 PAUSE
     if (tail.length === 1 && ['pause', 'resume', 'stop'].includes(tail[0] ?? '')) {
       if (method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
       const root = entry?.artifactsRoot ?? resolveArtifactsRoot({})
       const action = tail[0] as 'pause' | 'resume' | 'stop'
       controlActiveGraph(action, graphId)
-      if (action === 'pause') void pauseGraph(graphId, root)
-      else if (action === 'resume') void resumeGraph(graphId, root)
-      else void stopGraph(graphId, root)
+      // 文件层保留（chain-runner 兼容）：resume 时清理 PAUSE 文件
+      if (action === 'resume') {
+        try { unlinkSync(join(root, 'PAUSE')) } catch { /* 无 PAUSE 忽略 */ }
+      }
       json(res, 200, { ok: true, action })
       return
     }

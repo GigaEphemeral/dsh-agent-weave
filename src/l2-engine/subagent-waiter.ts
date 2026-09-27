@@ -58,6 +58,12 @@ export function waitForSubagentEnd(
     let settled = false
     let abortHandler: (() => void) | null = null
 
+    logger.info('weave-subagent-waiter', '开始等待', {
+      childId,
+      hasSignal: !!opts.signal,
+      idleWarningMs: opts.idleWarningMs ?? 600_000,
+    })
+
     function settle(fn: () => void): void {
       if (settled) return
       settled = true
@@ -113,24 +119,46 @@ export function waitForSubagentEnd(
     // ─── 订阅事件 ───
     const dispose = subscribeSubagentEvents(ctx, childId, {
       onActivity: handleActivity,
-      onEnd: (payload) => settle(() => resolve(payload)),
-      onError: (error) => settle(() => reject(error)),
+      // ★ v2 问题4 修法2：stopReason 非 completed → reject（不 resolve，避免假完成继续下游）
+      onEnd: (payload) => {
+        if (payload.stopReason !== 'completed') {
+          logger.warn('weave-subagent-waiter', '子代理非正常结束', {
+            childId,
+            stopReason: payload.stopReason,
+            outputBlocks: payload.output.length,
+          })
+          settle(() => reject(new Error(`子代理异常结束: stopReason=${payload.stopReason}（输出 ${payload.output.length} 块）`)))
+          return
+        }
+        logger.info('weave-subagent-waiter', '子代理正常完成', { childId, outputBlocks: payload.output.length })
+        settle(() => resolve(payload))
+      },
+      onError: (error) => {
+        logger.warn('weave-subagent-waiter', '子代理错误', { childId, error: String(error) })
+        settle(() => reject(error))
+      },
     })
 
     // ─── 用户中止：interrupt 子代理（A4/A5）→ 按 reason 分流 ───
     if (opts.signal) {
       abortHandler = () => {
         const reason = (opts.signal as AbortSignal).reason
+        const reasonStr = reason instanceof Error
+          ? `${reason.constructor.name}: ${reason.message}`
+          : String(reason)
+        // ★ v2 问题3 修法3：abort 日志
+        logger.info('weave-subagent-waiter', '⚡ 收到 abort 信号', { childId, reason: reasonStr })
+
         const parent = opts.parentAgent
         if (parent !== undefined) {
-          interruptSubagent(ctx, childId, parent).catch((err) => {
-            logger.warn('weave-addsubagent', 'interrupt 调用失败', {
+          interruptSubagent(ctx, childId, parent)
+            .then(() => logger.info('weave-subagent-waiter', 'interrupt 已调用', { childId }))
+            .catch((err) => logger.warn('weave-subagent-waiter', 'interrupt 失败', {
               childId,
               error: err instanceof Error ? err.message : String(err),
-            })
-          })
+            }))
         } else {
-          logger.warn('weave-addsubagent', '无 parentAgent，无法 interrupt，等待自然结束', { childId })
+          logger.warn('weave-subagent-waiter', '无 parentAgent，无法 interrupt，等待自然结束', { childId })
         }
         // ★ Bugs-V1 §9.2：分流——PauseError → 暂停（可恢复）；其他 → 终止
         if (reason instanceof PauseError) {
@@ -141,6 +169,8 @@ export function waitForSubagentEnd(
         }
       }
       opts.signal.addEventListener('abort', abortHandler, { once: true })
+    } else {
+      logger.warn('weave-subagent-waiter', '无 signal（无法暂停/终止此节点）', { childId })
     }
 
     scheduleIdleCheck()
