@@ -1,8 +1,11 @@
+import { PauseError } from './subagent-waiter.js'
+
 /**
- * 内存化图控制（MVP-4 问题四修复 3）。
+ * 内存化图控制（MVP-4 问题四修复 3 + Bugs-V1 §9：AbortController 贯通）。
  *
  * 相比 PAUSE/STOP 文件轮询（chain-runner），内存状态响应更快、无文件 IO。
- * 引擎节点边界检查 isPaused/isStopped；REST /pause|resume|stop 调用。
+ * pause/stop 触发 AbortController.abort（打断当前 subagent，经 graphSignal 传递）；
+ * reason 分流：pause→PauseError（可恢复），stop→Error（终止）。
  */
 export interface GraphControl {
   pause(): void
@@ -10,8 +13,17 @@ export interface GraphControl {
   stop(): void
   isPaused(): boolean
   isStopped(): boolean
+  /** 图级控制信号（pause/stop 时 abort；resume 后重置）。 */
+  getSignal(): AbortSignal
   /** 暂停时阻塞，resume/stop 后 resolve。 */
   waitForResume(): Promise<void>
+}
+
+interface ControlState {
+  paused: boolean
+  stopped: boolean
+  controller: AbortController
+  waiters: Array<() => void>
 }
 
 const controls = new Map<string, GraphControl>()
@@ -19,26 +31,36 @@ const controls = new Map<string, GraphControl>()
 export function getGraphControl(graphId: string): GraphControl {
   let ctrl = controls.get(graphId)
   if (!ctrl) {
-    const state = { paused: false, stopped: false }
-    const waiters: Array<() => void> = []
+    const state: ControlState = { paused: false, stopped: false, controller: new AbortController(), waiters: [] }
     ctrl = {
-      pause: () => { state.paused = true },
+      pause: () => {
+        if (state.paused || state.stopped) return
+        state.paused = true
+        // ★ Bugs-V1 §9：pause → PauseError（可恢复；触发 interrupt）
+        state.controller.abort(new PauseError('user-pause'))
+      },
       resume: () => {
+        if (state.stopped) return
         state.paused = false
-        for (const w of waiters) w()
-        waiters.length = 0
+        state.controller = new AbortController() // 重置信号
+        for (const w of state.waiters) w()
+        state.waiters.length = 0
       },
       stop: () => {
+        if (state.stopped) return
         state.stopped = true
         state.paused = false
-        for (const w of waiters) w()
-        waiters.length = 0
+        // ★ Bugs-V1 §9：stop → 普通 Error（终止；触发 interrupt）
+        state.controller.abort(new Error('user-stop'))
+        for (const w of state.waiters) w()
+        state.waiters.length = 0
       },
       isPaused: () => state.paused,
       isStopped: () => state.stopped,
-      waitForResume: () => new Promise((resolve) => {
-        if (!state.paused) resolve()
-        else waiters.push(resolve)
+      getSignal: () => state.controller.signal,
+      waitForResume: () => new Promise((r) => {
+        if (!state.paused) r()
+        else state.waiters.push(r)
       }),
     }
     controls.set(graphId, ctrl)

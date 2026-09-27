@@ -32,6 +32,7 @@ export const WsEventSchema = z.object({
     'node-idle-warning',
     'node-loop-detected',
     'graph-paused',
+    'graph-error',
   ]),  node: z.string().optional(),
   timestamp: z.number(),
   data: z.record(z.string(), z.unknown()).default({}),
@@ -53,8 +54,9 @@ export function mapEventType(type: TrajectoryEvent['type']): WsEvent['event_type
     case 'graph/node-idle-warning': return 'node-idle-warning'
     case 'graph/node-loop-detected': return 'node-loop-detected'
     case 'graph/paused': return 'graph-paused'
+    case 'graph/error': return 'graph-error' // Bugs-V1 §9.6：不再映射为 graph-end
     case 'graph/end': return 'graph-end'
-    default: return 'graph-end' // graph/error → graph-end（保守）
+    default: return 'graph-end'
   }
 }
 

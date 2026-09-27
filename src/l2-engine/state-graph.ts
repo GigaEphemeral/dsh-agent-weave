@@ -391,8 +391,10 @@ export function createStateGraph<T extends Record<string, unknown>>(
 
           // ★ 步骤3：新 waiter 订阅活动 → 转发 graph/node-activity / idle-warning / loop-detected
           // （问题三 A3：无硬超时；A4/A5：中止 → interrupt；D2/D3：循环/空闲仅提示）
+          // ★ Bugs-V1 §9.4：图级控制信号优先（graphSignal）；缺省用 run signal
+          const effectiveSignal = nodeCtx.graphSignal ?? signal
           result = await waitForSubagentEnd(nodeCtx.ctx, activeChildId, {
-            ...(signal !== undefined ? { signal } : {}),
+            ...(effectiveSignal !== undefined ? { signal: effectiveSignal } : {}),
             parentAgent: agent, // 关键：父 Agent 作 interrupt authority（A5）
             onActivity: (activity) => {
               nodeCtx.emit({
@@ -689,6 +691,8 @@ export function createStateGraph<T extends Record<string, unknown>>(
             checkpoint: options.checkpoint,
             iteration,
             ...(options.agent !== undefined ? { agent: options.agent } : {}),
+            // ★ Bugs-V1 §9.4：图级控制信号（暂停/终止打断 subagent）
+            graphSignal: ctrl.getSignal(),
             reportTokenUsage(usage) {
               pending.usage = { input: usage.input, output: usage.output, cacheRead: usage.cacheRead ?? 0 }
             },
@@ -831,8 +835,33 @@ export function createStateGraph<T extends Record<string, unknown>>(
           current = next
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error))
-          // ★ 问题三 B1/A4+A5：用户暂停（PauseError）→ emit graph/paused（不是失败）
+          // ★ 问题三 B1/A4+A5 + Bugs-V1 §9.4：用户暂停（PauseError）→ 写快照 + graph/paused
           if (error instanceof PauseError) {
+            if (artifactsRoot) {
+              try {
+                const snapshot: PauseSnapshot<T> = {
+                  graphId,
+                  graphVersion: options.graphVersion,
+                  graphSchemaHash: options.graphSchemaHash,
+                  pausedNode: current,
+                  pausedAt: Date.now(),
+                  iteration,
+                  resumeFrom: current,
+                  pauseReason: 'user-pause',
+                  pauseDetails: { suggestedAction: '点恢复继续，或用 weave_graph_resume 恢复' },
+                  state,
+                  loopUsage: Object.fromEntries(loopUsed),
+                  childSessions: Object.fromEntries(childIdByNode),
+                  completedNodes: [...completedNodes],
+                }
+                writePauseSnapshot(artifactsRoot, snapshot)
+              } catch (snapErr) {
+                logger.warn('weave', '暂停快照落盘失败', {
+                  graphId,
+                  error: snapErr instanceof Error ? snapErr.message : String(snapErr),
+                })
+              }
+            }
             emit({
               type: 'graph/paused',
               graphId,
@@ -840,10 +869,19 @@ export function createStateGraph<T extends Record<string, unknown>>(
               timestamp: Date.now(),
               data: { reason: 'user-pause', childId: error.childId, resumeFrom: current },
             })
-            clearGraphControl(graphId)
+            // 不 clearGraphControl（等 resume 重置信号）
             return {
               graphId, success: true, finalState: state, trajectory, iterations: iteration,
               data: { paused: true, reason: 'user-pause', resumeFrom: current },
+            }
+          }
+          // ★ Bugs-V1 §9.4：用户终止（stop）→ graph/end stopped，不写快照
+          if (ctrl.isStopped()) {
+            emit({ type: 'graph/end', graphId, node: current, timestamp: Date.now(), data: { stopped: true } })
+            clearGraphControl(graphId)
+            return {
+              graphId, success: true, finalState: state, trajectory, iterations: iteration,
+              data: { stopped: true },
             }
           }
           // ★ 问题五修复3：错误分类 → 需人工介入 → 暂停快照 + 通知（不再只发 node-error）

@@ -71,6 +71,8 @@ export function applyEvent(prev: GraphSnapshot | null, event: WsBizEvent): Graph
         next.current = event.node
         next.nodeStates[event.node] = 'running'
       }
+      // Bugs-V1 §9.6：node-start 更新 currentRole
+      if (typeof data.role === 'string') next.currentRole = data.role
       break
     case 'node-end':
       if (event.node) next.nodeStates[event.node] = 'completed'
@@ -78,6 +80,9 @@ export function applyEvent(prev: GraphSnapshot | null, event: WsBizEvent): Graph
       break
     case 'node-error':
       if (event.node) next.nodeStates[event.node] = 'failed'
+      break
+    case 'graph-error':
+      next.status = 'failed'
       break
     case 'loop-iteration':
       if (typeof data.iteration === 'number') next.iteration = data.iteration as number

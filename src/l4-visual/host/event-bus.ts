@@ -110,6 +110,10 @@ export function createEventBus(options: EventBusOptions = {}): GraphEventBusInte
         else if (data.status === 'waiting') status = 'waiting'
         else status = 'completed'
         break
+      case 'graph/paused':
+        // Bugs-V1 §9.6：图暂停事件 → status paused
+        status = 'paused'
+        break
       default:
         break
     }

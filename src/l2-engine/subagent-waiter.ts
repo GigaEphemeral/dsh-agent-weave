@@ -56,12 +56,18 @@ export function waitForSubagentEnd(
     let loopDetected = false
     const recentCalls: Array<{ key: string; at: number }> = []
     let settled = false
+    let abortHandler: (() => void) | null = null
 
     function settle(fn: () => void): void {
       if (settled) return
       settled = true
       if (idleCheckTimer) clearInterval(idleCheckTimer)
       dispose()
+      // ★ Bugs-V1 §9.2：摘除 abort listener（防泄漏）
+      if (abortHandler && opts.signal) {
+        opts.signal.removeEventListener('abort', abortHandler)
+        abortHandler = null
+      }
       fn()
     }
 
@@ -111,22 +117,31 @@ export function waitForSubagentEnd(
       onError: (error) => settle(() => reject(error)),
     })
 
-    // ─── 用户中止：interrupt 子代理（A4/A5）→ reject PauseError ───
-    opts.signal?.addEventListener('abort', () => {
-      logger.info('weave-addsubagent', '收到用户中止信号，interrupt 子代理', { childId })
-      const parent = opts.parentAgent
-      if (parent !== undefined) {
-        interruptSubagent(ctx, childId, parent).catch((err) => {
-          logger.warn('weave-addsubagent', 'interrupt 调用失败', {
-            childId,
-            error: err instanceof Error ? err.message : String(err),
+    // ─── 用户中止：interrupt 子代理（A4/A5）→ 按 reason 分流 ───
+    if (opts.signal) {
+      abortHandler = () => {
+        const reason = (opts.signal as AbortSignal).reason
+        const parent = opts.parentAgent
+        if (parent !== undefined) {
+          interruptSubagent(ctx, childId, parent).catch((err) => {
+            logger.warn('weave-addsubagent', 'interrupt 调用失败', {
+              childId,
+              error: err instanceof Error ? err.message : String(err),
+            })
           })
-        })
-      } else {
-        logger.warn('weave-addsubagent', '无 parentAgent，无法 interrupt，等待自然结束', { childId })
+        } else {
+          logger.warn('weave-addsubagent', '无 parentAgent，无法 interrupt，等待自然结束', { childId })
+        }
+        // ★ Bugs-V1 §9.2：分流——PauseError → 暂停（可恢复）；其他 → 终止
+        if (reason instanceof PauseError) {
+          settle(() => reject(reason))
+        } else {
+          const msg = reason instanceof Error ? reason.message : String(reason)
+          settle(() => reject(new Error(`用户终止: ${msg}`)))
+        }
       }
-      settle(() => reject(new PauseError(childId)))
-    }, { once: true })
+      opts.signal.addEventListener('abort', abortHandler, { once: true })
+    }
 
     scheduleIdleCheck()
   })

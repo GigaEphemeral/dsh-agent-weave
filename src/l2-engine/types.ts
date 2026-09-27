@@ -63,6 +63,8 @@ export interface GraphNodeContext<T> {
   reportTokenUsage?(usage: { input: number; output: number; cacheRead?: number }): void
   /** 节点执行时上报 retry 计数（用于可视化，S13 修复）。 */
   reportRetry?(count: number): void
+  /** ★ Bugs-V1 §9.3：图级控制信号（来自 GraphControl；暂停/终止打断 subagent）。 */
+  graphSignal?: AbortSignal
 }
 
 /**

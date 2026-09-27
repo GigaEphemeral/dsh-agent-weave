@@ -74,10 +74,26 @@ describe('问题三 A3/A4/A5：waitForSubagentEnd 重设计', () => {
       () => { throw new Error('不应 resolve') },
       (e) => e,
     )
-    ctrl.abort()
+    // 模拟 graph-control pause：abort with PauseError（可恢复）
+    ctrl.abort(new PauseError('user-pause'))
     const err = await p
     expect(err).toBeInstanceOf(PauseError)
     expect(interrupt).toHaveBeenCalledWith('child-1', { kind: 'ancestor', agent: { sessionId: 'parent' } })
+  })
+
+  it('signal abort（非 PauseError）→ reject 终止 Error（stop）', async () => {
+    const { ctx, interrupt } = mockCtx()
+    const ctrl = new AbortController()
+    const waiter = waitForSubagentEnd(ctx, 'child-1', { signal: ctrl.signal, parentAgent: { sessionId: 'parent' } })
+    const p = waiter.then(
+      () => { throw new Error('不应 resolve') },
+      (e) => e,
+    )
+    ctrl.abort(new Error('user-stop'))
+    const err = await p
+    expect(err).toBeInstanceOf(Error)
+    expect(err.message).toContain('用户终止')
+    expect(interrupt).toHaveBeenCalled()
   })
 
   it('D2：循环调用检测触发 onLoopDetected', async () => {

@@ -15,7 +15,52 @@ import { getGlobalTokens } from '../l4-visual/host/visual-runtime.js'
 import { getGlobalLedger } from './graph-run-commands.js'
 import { readPauseSnapshot, removePauseSnapshot } from '../l2-engine/pause-snapshot.js'
 import { resolveExecWorkspace } from './graph-commands.js'
-import type { PauseSnapshot } from '../l2-engine/types.js'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+/** Bugs-V1 §10.2：构建恢复通知（失败原因 + 继续要求 + 读回上次产物）。 */
+function buildResumePrompt(
+  snapshot: { pausedNode: string; pauseReason: string; pauseDetails?: { error?: string; suggestedAction?: string }; state: Record<string, unknown> },
+  root: string,
+  additionalContext?: string,
+): string {
+  const lines = [
+    `[恢复通知] 你（节点 ${snapshot.pausedNode}）上次执行被中断，原因如下：`,
+    ``,
+    `暂停原因: ${snapshot.pauseReason}`,
+  ]
+  const d = snapshot.pauseDetails ?? {}
+  if (d.error) lines.push(`错误信息: ${d.error}`)
+  if (d.suggestedAction) lines.push(`建议动作: ${d.suggestedAction}`)
+  lines.push(``)
+  lines.push(`【继续要求】`)
+  lines.push(`1. 复盘上述失败原因，不要重复同样的动作。`)
+  lines.push(`2. 若上次在写产物时失败，先读回已写内容，再补齐缺失部分（不要从零重写）。`)
+  lines.push(`3. 若上次在探测时失败，先查共享发现池（可能已有其他节点的探测结果）。`)
+  lines.push(`4. 完成后在产物末尾附 <!-- weave-handoff --> 块。`)
+  if (additionalContext) {
+    lines.push(``)
+    lines.push(`[用户补充]`)
+    lines.push(additionalContext)
+  }
+  // 附上次产物前 2000 字（防上下文丢失）
+  const artifacts = snapshot.state.artifacts as Record<string, string> | undefined
+  const prevPath = artifacts?.[snapshot.pausedNode]
+  if (prevPath) {
+    const abs = join(root, prevPath)
+    try {
+      if (existsSync(abs)) {
+        const text = readFileSync(abs, 'utf8').slice(0, 2000)
+        lines.push(``)
+        lines.push(`【你上次的产物（前 2000 字）】`)
+        lines.push(text)
+      }
+    } catch {
+      // 读回失败忽略
+    }
+  }
+  return lines.join('\n')
+}
 
 /** 从暂停快照恢复图（异步后台跑）。 */
 export async function resumeGraphRealTool(
@@ -27,7 +72,7 @@ export async function resumeGraphRealTool(
   signal?: AbortSignal,
 ): Promise<{ ok: boolean; message: string; graphId?: string; resumeFrom?: string }> {
   const root = resolveArtifactsRoot({ workspace })
-  const snapshot = readPauseSnapshot<PauseSnapshot<Record<string, unknown>>>(root, graphId)
+  const snapshot = readPauseSnapshot<Record<string, unknown>>(root, graphId)
   if (!snapshot) {
     return { ok: false, message: `未找到 graph ${graphId} 的暂停快照（pauses/${graphId}.json）——该图未暂停或快照已清理` }
   }
@@ -37,19 +82,20 @@ export async function resumeGraphRealTool(
     return { ok: false, message: `graph ${graphId} 未注册（spec 不可得），无法重建图` }
   }
 
-  // 用户补充上下文先发给暂停节点的子代理
-  if (additionalContext && snapshot.childSessions[snapshot.pausedNode]) {
+  // Bugs-V1 §10.2：恢复通知发给暂停节点的子代理（含失败原因 + 继续要求 + 读回产物）
+  if (snapshot.childSessions[snapshot.pausedNode]) {
     const childId = snapshot.childSessions[snapshot.pausedNode]
+    const resumePrompt = buildResumePrompt(snapshot, root, additionalContext)
     try {
       await ctx.subagents.sendMessage(
         parent as never,
         childId as never,
-        [{ type: 'text', text: `[用户补充]\n${additionalContext}\n\n请继续。` }],
+        [{ type: 'text', text: resumePrompt }],
         { signal: signal ?? new AbortController().signal },
       )
-      ctx.logger.info('weave', '恢复前已向子代理发送补充上下文', { graphId, node: snapshot.pausedNode })
+      ctx.logger.info('weave', '已向暂停节点子代理发送恢复通知', { graphId, node: snapshot.pausedNode })
     } catch (error) {
-      ctx.logger.warn('weave', '恢复前发送补充上下文失败（继续恢复）', {
+      ctx.logger.warn('weave', '发送恢复通知失败（继续恢复）', {
         graphId,
         error: error instanceof Error ? error.message : String(error),
       })
@@ -137,13 +183,19 @@ export async function resumeGraphRealTool(
       completedNodes: snapshot.completedNodes,
     })
     .then((result) => {
-      ctx.logger.info('weave', '恢复后执行结束', { graphId, success: result.success, iterations: result.iterations })
+      // Bugs-V1 §10.3：成功且未再次暂停才删快照；失败/再暂停保留供二次恢复
+      if (result.success && !result.data?.paused) {
+        removePauseSnapshot(root, graphId)
+        ctx.logger.info('weave', '恢复成功，快照已清理', { graphId })
+      } else {
+        ctx.logger.info('weave', '恢复后再次暂停/失败，保留快照', { graphId, success: result.success })
+      }
     })
     .catch((err) => {
-      ctx.logger.error('weave', '恢复执行失败', err instanceof Error ? err : new Error(String(err)), { graphId })
+      ctx.logger.error('weave', '恢复执行失败，保留快照供二次恢复', err instanceof Error ? err : new Error(String(err)), { graphId })
+      // 不删快照
     })
 
-  removePauseSnapshot(root, graphId)
   return { ok: true, message: `图已从暂停点恢复（异步执行中）`, graphId, resumeFrom: snapshot.resumeFrom }
 }
 
