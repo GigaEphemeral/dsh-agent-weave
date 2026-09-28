@@ -64,7 +64,19 @@ export async function runGraphRealTool(
     signal?: AbortSignal,
     rolesDir?: string,
 ) {
+  // 问题四：从角色 YAML 的 quality_gate 接入节点产物验证（产物空 → 整图停）
+  // rolesDir 由 index.ts 单一真相源传入；未传则降级为不加载 quality_gate（不崩）
   const roles = rolesDir ? loadRoleDefinitions(rolesDir) : []
+
+  // ★ Bugs-V4 止血：环境变量 WEAVE_DISABLE_QUALITY_GATE=1 时关闭所有质量门 + inputGate
+  // 用途：在产物路径修复（prompt 相对路径 + 多候选查找）落地前，让图先能跑通
+  const disableQualityGate = process.env.WEAVE_DISABLE_QUALITY_GATE === '1'
+  if (disableQualityGate) {
+    ctx.logger.warn('weave', '⚠ 质量门 + inputGate 已被环境变量关闭', {
+      env: 'WEAVE_DISABLE_QUALITY_GATE=1',
+      hint: '这是临时止血；根因修复见 Bugs-V4（产物路径）',
+    })
+  }
 
   // ★ Bugs-v3 修复2a：占位 hash 自动重算（graphSchemaHash: "placeholder" → 真实值）
   if (isPlaceholderHash(spec.graphSchemaHash)) {
@@ -137,14 +149,13 @@ export async function runGraphRealTool(
         // P4.0.6：artifactName 支持（缺省 <nodeId>.md）
         artifactName: node.artifactName ?? `${node.id}.md`,
         role: node.roleRef,
-        // ★ Bugs-v3 修复2c：传 workspace（相对路径 + 多候选查找）
-        ...(workspace !== undefined ? { workspace } : {}),
         ...(node.promptTemplate !== undefined ? { promptTemplate: node.promptTemplate } : {}),
-        ...(role && role.quality_gate.length > 0 ? { qualityGate: role.quality_gate } : {}),
-        // v2.0 Phase C：角色定义（Prompt 边界块注入）
+        // ★ disableQualityGate 时跳过硬性质量门
+        ...(role && !disableQualityGate && role.quality_gate.length > 0 ? { qualityGate: role.quality_gate } : {}),
+        // v2.0 Phase C：角色定义（Prompt 边界块注入）——保留，用于 prompt 边界块
         ...(role !== undefined ? { roleDefinition: role as never } : {}),
-        // 问题三 D1 + v2.0：默认 inputGate（seq 上游），显式配置优先
-        ...(defaultGate !== undefined ? { inputGate: defaultGate } : {}),
+        // ★ disableQualityGate 时跳过 inputGate（避免下游因上游产物路径错误被拦）
+        ...(defaultGate !== undefined && !disableQualityGate ? { inputGate: defaultGate } : {}),
       })
     } else if (node.nodeType === 'approval') {
       graph.addApprovalGate(node.id, {
