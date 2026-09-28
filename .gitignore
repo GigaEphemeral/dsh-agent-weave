@@ -20,7 +20,7 @@ productions/*
 # 日志与临时文件
 *.log
 .ocr-reports/
-
+test-env/runs/*
 
 .idea
 reports/
